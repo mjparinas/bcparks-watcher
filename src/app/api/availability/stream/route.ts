@@ -26,16 +26,14 @@ function parseIntParam(value: string | null): number | undefined {
 function parsePartyOverrides(
   searchParams: URLSearchParams,
 ): PartyOverrides | undefined {
-  const adults = parseIntParam(searchParams.get("adults"));
-  const kids = parseIntParam(searchParams.get("kids"));
+  const partySize = parseIntParam(searchParams.get("partySize"));
   const tents = parseIntParam(searchParams.get("tents"));
-  const cars = parseIntParam(searchParams.get("cars"));
 
-  if (adults == null && kids == null && tents == null && cars == null) {
+  if (partySize == null && tents == null) {
     return undefined;
   }
 
-  return { adults, kids, tents, cars };
+  return { partySize, tents };
 }
 
 function parseDateOverrides(

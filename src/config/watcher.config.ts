@@ -48,11 +48,8 @@ export type ParkConfig = {
 };
 
 export type PartyConfig = {
-  adults: number;
-  /** Kid ages — used for notes; partySize counts everyone */
-  kidsAges: number[];
+  /** Tent count — maps to GoingToCamp subEquipmentCategoryId */
   tents: number;
-  cars: number;
 };
 
 /** GoingToCamp tent subtypes: 1 Tent / 2 Tent / 3 Tent */
@@ -63,11 +60,9 @@ export const TENT_SUB_EQUIPMENT_IDS: Record<1 | 2 | 3, number> = {
 };
 
 export type PartyOverrides = {
-  adults?: number;
-  kids?: number;
-  kidsAges?: number[];
+  /** Total people sent as partySize to the BC Parks API */
+  partySize?: number;
   tents?: number;
-  cars?: number;
 };
 
 export type DateOverrides = {
@@ -105,15 +100,6 @@ export function isIsoDate(value: string | null | undefined): value is string {
   );
 }
 
-/** Keep kid ages aligned when the kids count changes. */
-export function kidsAgesForCount(count: number, defaults: number[]): number[] {
-  const n = clampInt(count, 0, 12);
-  if (n <= 0) return [];
-  if (n <= defaults.length) return defaults.slice(0, n);
-  const pad = defaults[defaults.length - 1] ?? 5;
-  return [...defaults, ...Array.from({ length: n - defaults.length }, () => pad)];
-}
-
 export function tentSubEquipmentCategoryId(tents: number): number {
   const n = clampInt(tents, 1, 3) as 1 | 2 | 3;
   return TENT_SUB_EQUIPMENT_IDS[n];
@@ -129,31 +115,19 @@ export function applyPartyOverrides(
 ): WatcherConfig {
   if (!overrides) return config;
 
-  const adults =
-    overrides.adults != null
-      ? clampInt(overrides.adults, 1, 20)
-      : config.party.adults;
-  const kidsAges =
-    overrides.kidsAges != null
-      ? overrides.kidsAges.map((age) => clampInt(age, 0, 17))
-      : overrides.kids != null
-        ? kidsAgesForCount(overrides.kids, config.party.kidsAges)
-        : config.party.kidsAges;
+  const partySize =
+    overrides.partySize != null
+      ? clampInt(overrides.partySize, 1, 30)
+      : config.partySize;
   const tents =
     overrides.tents != null
       ? clampInt(overrides.tents, 1, 3)
       : config.party.tents;
-  const cars =
-    overrides.cars != null
-      ? clampInt(overrides.cars, 0, 6)
-      : config.party.cars;
-
-  const party: PartyConfig = { adults, kidsAges, tents, cars };
 
   return {
     ...config,
-    party,
-    partySize: adults + kidsAges.length,
+    party: { tents },
+    partySize,
     equipmentCategoryId: config.equipmentCategoryId,
     subEquipmentCategoryId: tentSubEquipmentCategoryId(tents),
     numEquipment: tents,
@@ -219,7 +193,7 @@ export type WatcherConfig = {
   /** Booking party details */
   party: PartyConfig;
   /**
-   * Total people sent to the BC Parks API (adults + kids).
+   * Total people sent to the BC Parks API.
    * Kept explicit so it’s easy to override.
    */
   partySize: number;
@@ -257,10 +231,7 @@ export const watcherConfig: WatcherConfig = {
   pollIntervalMinutes: 5,
 
   party: {
-    adults: 2,
-    kidsAges: [4, 6],
     tents: 1,
-    cars: 1,
   },
   partySize: 4,
   equipmentCategoryId: -32768,

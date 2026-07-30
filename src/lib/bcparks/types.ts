@@ -66,11 +66,8 @@ export type AvailabilityReport = {
   homeBase?: string;
   maxDriveMinutesFromHome?: number;
   party?: {
-    adults: number;
-    kidsAges: number[];
-    tents: number;
-    cars: number;
     partySize: number;
+    tents: number;
   };
   parksChecked: Array<{
     shortName: string;
@@ -90,11 +87,8 @@ export type CheckMeta = {
   homeBase?: string;
   maxDriveMinutesFromHome?: number;
   party?: {
-    adults: number;
-    kidsAges: number[];
-    tents: number;
-    cars: number;
     partySize: number;
+    tents: number;
   };
   parksChecked: Array<{
     shortName: string;

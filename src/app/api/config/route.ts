@@ -27,15 +27,8 @@ export async function GET() {
     endDateLabel: config.endDateLabel,
     nights: config.nights,
     pollIntervalMinutes: config.pollIntervalMinutes,
-    party: config.party,
     partySize: config.partySize,
-    equipment: {
-      tents: config.party.tents,
-      cars: config.party.cars,
-      subEquipmentCategoryId: config.subEquipmentCategoryId,
-      label:
-        config.party.tents === 1 ? "1 Tent" : `${config.party.tents} Tents`,
-    },
+    tents: config.party.tents,
     parks,
   });
 }

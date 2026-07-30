@@ -10,7 +10,7 @@ Default watch list (≤ ~3 hours from **Langley, BC**, no ferry / no toll roads)
 
 Search window: **today → BC school start** (Tue Sep 8, 2026), **Friday→Sunday** stays only.
 
-Party defaults: **2 adults + kids (4 & 6)**, **1 tent**, **1 car**.
+Defaults sent to the parks API: **party of 4**, **1 tent**.
 
 Sunshine Coast and Island parks are excluded because they need BC Ferries.
 
@@ -35,7 +35,7 @@ export const watcherConfig = {
   endDate: "2026-09-08", // school start (exclusive)
   nights: ["friday", "saturday"], // Fri→Sun
   partySize: 4,
-  party: { adults: 2, kidsAges: [4, 6], tents: 1, cars: 1 },
+  party: { tents: 1 },
   subEquipmentCategoryId: -32768, // 1 Tent
   parks: [
     // ...

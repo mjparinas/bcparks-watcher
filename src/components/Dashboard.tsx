@@ -17,17 +17,7 @@ type PublicConfig = {
   nights: string[];
   pollIntervalMinutes: number;
   partySize: number;
-  party?: {
-    adults: number;
-    kidsAges: number[];
-    tents: number;
-    cars: number;
-  };
-  equipment?: {
-    tents: number;
-    cars: number;
-    label: string;
-  };
+  tents: number;
   parks: Array<{
     name: string;
     shortName: string;
@@ -94,10 +84,8 @@ function sortWeekends(weekends: WeekendResult[]): WeekendResult[] {
 }
 
 type PartySettings = {
-  adults: number;
-  kids: number;
+  partySize: number;
   tents: number;
-  cars: number;
 };
 
 type DateSettings = {
@@ -106,10 +94,8 @@ type DateSettings = {
 };
 
 const DEFAULT_PARTY: PartySettings = {
-  adults: 2,
-  kids: 2,
+  partySize: 4,
   tents: 1,
-  cars: 1,
 };
 
 const DEFAULT_DATES: DateSettings = {
@@ -119,10 +105,8 @@ const DEFAULT_DATES: DateSettings = {
 
 function partyFromConfig(config: PublicConfig): PartySettings {
   return {
-    adults: config.party?.adults ?? DEFAULT_PARTY.adults,
-    kids: config.party?.kidsAges?.length ?? DEFAULT_PARTY.kids,
-    tents: config.party?.tents ?? config.equipment?.tents ?? DEFAULT_PARTY.tents,
-    cars: config.party?.cars ?? config.equipment?.cars ?? DEFAULT_PARTY.cars,
+    partySize: config.partySize ?? DEFAULT_PARTY.partySize,
+    tents: config.tents ?? DEFAULT_PARTY.tents,
   };
 }
 
@@ -133,19 +117,10 @@ function datesFromConfig(config: PublicConfig): DateSettings {
   };
 }
 
-function formatPartyLabel(
-  party: PartySettings,
-  kidsAges?: number[],
-): string {
-  const kidsPart =
-    party.kids <= 0
-      ? "no kids"
-      : kidsAges && kidsAges.length === party.kids
-        ? `kids ${kidsAges.join(" & ")}`
-        : `${party.kids} kid${party.kids === 1 ? "" : "s"}`;
+function formatPartyLabel(party: PartySettings): string {
+  const people = `${party.partySize} ${party.partySize === 1 ? "person" : "people"}`;
   const tentLabel = `${party.tents} tent${party.tents === 1 ? "" : "s"}`;
-  const carLabel = `${party.cars} car${party.cars === 1 ? "" : "s"}`;
-  return `${party.adults} adult${party.adults === 1 ? "" : "s"}, ${kidsPart}, ${tentLabel}, ${carLabel}`;
+  return `${people}, ${tentLabel}`;
 }
 
 export function Dashboard() {
@@ -206,10 +181,8 @@ export function Dashboard() {
 
     const params = new URLSearchParams({
       parks: Array.from(parksToCheck).join(","),
-      adults: String(partyToUse.adults),
-      kids: String(partyToUse.kids),
+      partySize: String(partyToUse.partySize),
       tents: String(partyToUse.tents),
-      cars: String(partyToUse.cars),
       startDate: datesToUse.startDate,
       endDate: datesToUse.endDate,
     });
@@ -387,10 +360,8 @@ export function Dashboard() {
     // Intentionally keyed on settings fields only — not load/config identity.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
-    party.adults,
-    party.kids,
+    party.partySize,
     party.tents,
-    party.cars,
     dates.startDate,
     dates.endDate,
     settingsReady,
@@ -508,7 +479,7 @@ export function Dashboard() {
             : meta
               ? `Last check ${formatCheckedAt(meta.checkedAt)} · every ${meta.pollIntervalMinutes} min`
               : "Waiting for first check…"}
-          {` · ${formatPartyLabel(party, meta?.party?.kidsAges ?? config?.party?.kidsAges)}`}
+          {` · ${formatPartyLabel(party)}`}
         </p>
 
         <div className="party-controls" role="group" aria-label="Search settings">
@@ -526,18 +497,11 @@ export function Dashboard() {
             onChange={(value) => updateDates("endDate", value)}
           />
           <Stepper
-            label="Adults"
-            value={party.adults}
+            label="People"
+            value={party.partySize}
             min={1}
-            max={12}
-            onChange={(value) => updateParty("adults", value)}
-          />
-          <Stepper
-            label="Kids"
-            value={party.kids}
-            min={0}
-            max={8}
-            onChange={(value) => updateParty("kids", value)}
+            max={16}
+            onChange={(value) => updateParty("partySize", value)}
           />
           <Stepper
             label="Tents"
@@ -545,13 +509,6 @@ export function Dashboard() {
             min={1}
             max={3}
             onChange={(value) => updateParty("tents", value)}
-          />
-          <Stepper
-            label="Cars"
-            value={party.cars}
-            min={0}
-            max={4}
-            onChange={(value) => updateParty("cars", value)}
           />
         </div>
 

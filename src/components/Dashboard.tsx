@@ -430,7 +430,6 @@ export function Dashboard() {
     resumeTimerRef.current = window.setTimeout(() => {
       resumeTimerRef.current = null;
       if (!navigator.onLine) return;
-      if (document.visibilityState !== "visible") return;
       void loadRef.current?.();
     }, delayMs);
   }, []);
@@ -797,7 +796,6 @@ export function Dashboard() {
     if (!autoRefresh || !config) return;
     const ms = Math.max(config.pollIntervalMinutes, 1) * 60_000;
     const id = window.setInterval(() => {
-      if (document.visibilityState !== "visible") return;
       if (!navigator.onLine) return;
       void load();
     }, ms);
@@ -805,13 +803,13 @@ export function Dashboard() {
   }, [autoRefresh, config, load]);
 
   // Survive laptop sleep / network blips: abort hung searches and catch up.
+  // Keep polling while the tab is hidden; only gate on connectivity.
   useEffect(() => {
     if (!settingsReady) return;
 
     const resumeIfNeeded = () => {
       if (!autoRefreshRef.current) return;
       if (!navigator.onLine) return;
-      if (document.visibilityState !== "visible") return;
 
       const pollMs =
         Math.max(configRef.current?.pollIntervalMinutes ?? 10, 1) * 60_000;
@@ -833,15 +831,19 @@ export function Dashboard() {
     };
 
     const onVisibility = () => {
+      // Browsers throttle timers in background; catch up when shown again.
       if (document.visibilityState === "visible") resumeIfNeeded();
     };
     const onOnline = () => resumeIfNeeded();
+    const onPageShow = () => resumeIfNeeded();
 
     document.addEventListener("visibilitychange", onVisibility);
     window.addEventListener("online", onOnline);
+    window.addEventListener("pageshow", onPageShow);
     return () => {
       document.removeEventListener("visibilitychange", onVisibility);
       window.removeEventListener("online", onOnline);
+      window.removeEventListener("pageshow", onPageShow);
       if (resumeTimerRef.current != null) {
         window.clearTimeout(resumeTimerRef.current);
       }

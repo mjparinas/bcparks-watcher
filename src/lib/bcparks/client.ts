@@ -5,24 +5,48 @@ import {
   type ResourceLocation,
 } from "./types";
 
-const DEFAULT_HEADERS = {
+/** Azure Front Door blocks obvious bot UAs — mirror a normal browser. */
+const DEFAULT_HEADERS: HeadersInit = {
   "User-Agent":
-    "Mozilla/5.0 (compatible; BCParksWeekendWatcher/1.0; +local-dev)",
-  Accept: "application/json",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+  Accept: "application/json, text/plain, */*",
   "Accept-Language": "en-CA,en;q=0.9",
+  Origin: BCPARKS_BASE,
+  Referer: `${BCPARKS_BASE}/create-booking/results`,
 };
 
-async function getJson<T>(url: string): Promise<T> {
-  const response = await fetch(url, {
-    headers: DEFAULT_HEADERS,
-    cache: "no-store",
-  });
+const RETRYABLE_STATUS = new Set([403, 429, 502, 503, 504]);
+const MAX_ATTEMPTS = 4;
 
-  if (!response.ok) {
-    throw new Error(`BC Parks API ${response.status} for ${url}`);
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function getJson<T>(url: string): Promise<T> {
+  let lastError: Error | null = null;
+
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
+    const response = await fetch(url, {
+      headers: DEFAULT_HEADERS,
+      cache: "no-store",
+    });
+
+    if (response.ok) {
+      return (await response.json()) as T;
+    }
+
+    const message = `BC Parks API ${response.status} for ${url}`;
+    lastError = new Error(message);
+
+    if (!RETRYABLE_STATUS.has(response.status) || attempt === MAX_ATTEMPTS) {
+      throw lastError;
+    }
+
+    // Back off harder on WAF / rate-limit responses
+    await sleep(400 * 2 ** (attempt - 1) + Math.floor(Math.random() * 200));
   }
 
-  return (await response.json()) as T;
+  throw lastError ?? new Error(`BC Parks API failed for ${url}`);
 }
 
 export async function listResourceLocations(): Promise<ResourceLocation[]> {

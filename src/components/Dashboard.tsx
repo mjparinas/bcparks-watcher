@@ -77,6 +77,65 @@ function isSortBy(value: unknown): value is SortBy {
   return value === "date" || value === "distance";
 }
 
+function isAbortError(err: unknown): boolean {
+  return (
+    (err instanceof DOMException && err.name === "AbortError") ||
+    (err instanceof Error && err.name === "AbortError")
+  );
+}
+
+function isNetworkError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  const message = err.message.toLowerCase();
+  return (
+    err.name === "TypeError" ||
+    message.includes("failed to fetch") ||
+    message.includes("networkerror") ||
+    message.includes("network request failed") ||
+    message.includes("load failed")
+  );
+}
+
+/** Idle gap between SSE chunks before we treat the stream as dead (sleep/wake). */
+const STREAM_IDLE_MS = 90_000;
+
+async function readStreamChunk(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  signal: AbortSignal,
+): Promise<ReadableStreamReadResult<Uint8Array>> {
+  if (signal.aborted) {
+    throw new DOMException("Aborted", "AbortError");
+  }
+
+  return new Promise((resolve, reject) => {
+    const onAbort = () => {
+      cleanup();
+      reject(new DOMException("Aborted", "AbortError"));
+    };
+    const idleTimer = window.setTimeout(() => {
+      cleanup();
+      reject(new Error("STREAM_IDLE"));
+    }, STREAM_IDLE_MS);
+
+    const cleanup = () => {
+      window.clearTimeout(idleTimer);
+      signal.removeEventListener("abort", onAbort);
+    };
+
+    signal.addEventListener("abort", onAbort, { once: true });
+    reader.read().then(
+      (result) => {
+        cleanup();
+        resolve(result);
+      },
+      (err: unknown) => {
+        cleanup();
+        reject(err);
+      },
+    );
+  });
+}
+
 function sortWeekends(
   weekends: WeekendResult[],
   sortBy: SortBy = "date",
@@ -299,6 +358,14 @@ export function Dashboard() {
   const datesRef = useRef(dates);
   const nightsRef = useRef(nights);
   const sortByRef = useRef(sortBy);
+  const autoRefreshRef = useRef(autoRefresh);
+  const configRef = useRef(config);
+  const isCheckingRef = useRef(isChecking);
+  const lastSuccessAtRef = useRef(0);
+  const resumeTimerRef = useRef<number | null>(null);
+  const loadRef = useRef<
+    ((parksOverride?: Set<string>) => Promise<void>) | null
+  >(null);
   const skipSettingsReload = useRef(true);
   /** Party signature used for the results currently on screen */
   const resultsPartyKey = useRef(`${party.partySize}:${party.tents}`);
@@ -343,6 +410,30 @@ export function Dashboard() {
   useEffect(() => {
     sortByRef.current = sortBy;
   }, [sortBy]);
+
+  useEffect(() => {
+    autoRefreshRef.current = autoRefresh;
+  }, [autoRefresh]);
+
+  useEffect(() => {
+    configRef.current = config;
+  }, [config]);
+
+  useEffect(() => {
+    isCheckingRef.current = isChecking;
+  }, [isChecking]);
+
+  const scheduleResumeLoad = useCallback((delayMs = 600) => {
+    if (resumeTimerRef.current != null) {
+      window.clearTimeout(resumeTimerRef.current);
+    }
+    resumeTimerRef.current = window.setTimeout(() => {
+      resumeTimerRef.current = null;
+      if (!navigator.onLine) return;
+      if (document.visibilityState !== "visible") return;
+      void loadRef.current?.();
+    }, delayMs);
+  }, []);
 
   const markGone = useCallback((weekend: WeekendResult) => {
     const key = resultKey(weekend);
@@ -434,6 +525,8 @@ export function Dashboard() {
       _: String(Date.now()),
     });
 
+    let sawDone = false;
+
     try {
       // Optimistic clock so a fast re-search still shows a new "Updated" time
       setMeta((current) =>
@@ -454,10 +547,12 @@ export function Dashboard() {
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
       let buffer = "";
-      let finalReport: AvailabilityReport | null = null;
 
       while (true) {
-        const { done, value } = await reader.read();
+        const { done, value } = await readStreamChunk(
+          reader,
+          controller.signal,
+        );
         if (done) break;
 
         buffer += decoder.decode(value, { stream: true });
@@ -470,7 +565,12 @@ export function Dashboard() {
             .find((entry) => entry.startsWith("data: "));
           if (!line) continue;
 
-          const event = JSON.parse(line.slice(6)) as CheckEvent;
+          let event: CheckEvent;
+          try {
+            event = JSON.parse(line.slice(6)) as CheckEvent;
+          } catch {
+            continue;
+          }
 
           if (event.type === "meta") {
             setMeta(event.meta);
@@ -516,7 +616,8 @@ export function Dashboard() {
             setProgress({ index: event.index, total: event.total });
             setErrors((current) => [...current, event.error]);
           } else if (event.type === "done") {
-            finalReport = event.report;
+            sawDone = true;
+            lastSuccessAtRef.current = Date.now();
             setMeta({
               checkedAt: event.report.checkedAt,
               startDate: event.report.startDate,
@@ -555,18 +656,36 @@ export function Dashboard() {
         }
       }
 
-      void finalReport;
+      if (!sawDone && !controller.signal.aborted) {
+        throw new Error("INTERRUPTED");
+      }
     } catch (err) {
-      if (err instanceof DOMException && err.name === "AbortError") {
+      if (isAbortError(err)) {
         return;
       }
-      setError(err instanceof Error ? err.message : "Failed to load");
+      const interrupted =
+        err instanceof Error &&
+        (err.message === "INTERRUPTED" ||
+          err.message === "STREAM_IDLE" ||
+          isNetworkError(err));
+      if (interrupted) {
+        setError("Connection interrupted — will retry when you're back.");
+        if (autoRefreshRef.current) {
+          scheduleResumeLoad(1_200);
+        }
+      } else {
+        setError(err instanceof Error ? err.message : "Failed to load");
+      }
     } finally {
       if (abortRef.current === controller) {
         setIsChecking(false);
       }
     }
-  }, [markGone]);
+  }, [markGone, scheduleResumeLoad]);
+
+  useEffect(() => {
+    loadRef.current = load;
+  }, [load]);
 
   useEffect(() => {
     let cancelled = false;
@@ -678,10 +797,56 @@ export function Dashboard() {
     if (!autoRefresh || !config) return;
     const ms = Math.max(config.pollIntervalMinutes, 1) * 60_000;
     const id = window.setInterval(() => {
+      if (document.visibilityState !== "visible") return;
+      if (!navigator.onLine) return;
       void load();
     }, ms);
     return () => window.clearInterval(id);
   }, [autoRefresh, config, load]);
+
+  // Survive laptop sleep / network blips: abort hung searches and catch up.
+  useEffect(() => {
+    if (!settingsReady) return;
+
+    const resumeIfNeeded = () => {
+      if (!autoRefreshRef.current) return;
+      if (!navigator.onLine) return;
+      if (document.visibilityState !== "visible") return;
+
+      const pollMs =
+        Math.max(configRef.current?.pollIntervalMinutes ?? 10, 1) * 60_000;
+      const due =
+        lastSuccessAtRef.current === 0 ||
+        Date.now() - lastSuccessAtRef.current >= pollMs * 0.8;
+
+      if (isCheckingRef.current) {
+        // Mid-search connections often die across sleep — restart cleanly.
+        abortRef.current?.abort();
+        setIsChecking(false);
+        scheduleResumeLoad(800);
+        return;
+      }
+
+      if (due) {
+        scheduleResumeLoad(500);
+      }
+    };
+
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") resumeIfNeeded();
+    };
+    const onOnline = () => resumeIfNeeded();
+
+    document.addEventListener("visibilitychange", onVisibility);
+    window.addEventListener("online", onOnline);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisibility);
+      window.removeEventListener("online", onOnline);
+      if (resumeTimerRef.current != null) {
+        window.clearTimeout(resumeTimerRef.current);
+      }
+    };
+  }, [settingsReady, scheduleResumeLoad]);
 
   // Drop sticky results immediately when filters change (before search restarts).
   useEffect(() => {

@@ -378,9 +378,18 @@ export function Dashboard() {
       startDate: datesToUse.startDate,
       endDate: datesToUse.endDate,
       nights: ordered.join(","),
+      // Ensure each Search/auto-refresh is a distinct request
+      _: String(Date.now()),
     });
 
     try {
+      // Optimistic clock so a fast re-search still shows a new "Updated" time
+      setMeta((current) =>
+        current
+          ? { ...current, checkedAt: new Date().toISOString() }
+          : current,
+      );
+
       const response = await fetch(`/api/availability/stream?${params}`, {
         cache: "no-store",
         signal: controller.signal,

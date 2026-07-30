@@ -17,40 +17,20 @@ const DEFAULT_HEADERS: HeadersInit = {
 
 const RETRYABLE_STATUS = new Set([403, 429, 502, 503, 504]);
 const MAX_ATTEMPTS = 4;
-const CACHE_TTL_MS = 45_000;
 
-type CacheEntry = {
-  expires: number;
-  value: unknown;
-};
-
-const responseCache = new Map<string, CacheEntry>();
+/**
+ * Availability changes minute-to-minute, so we never reuse BC Parks JSON
+ * across searches. Concurrent callers for the same URL (parallel park jobs)
+ * share one in-flight fetch instead — that avoids stampedes without serving
+ * stale “still open” data on the next Search / auto-refresh.
+ */
+const inflightGets = new Map<string, Promise<unknown>>();
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function readCache<T>(url: string): T | null {
-  const hit = responseCache.get(url);
-  if (!hit) return null;
-  if (hit.expires <= Date.now()) {
-    responseCache.delete(url);
-    return null;
-  }
-  return hit.value as T;
-}
-
-function writeCache(url: string, value: unknown): void {
-  responseCache.set(url, {
-    expires: Date.now() + CACHE_TTL_MS,
-    value,
-  });
-}
-
-async function getJson<T>(url: string): Promise<T> {
-  const cached = readCache<T>(url);
-  if (cached != null) return cached;
-
+async function fetchJsonWithRetry<T>(url: string): Promise<T> {
   let lastError: Error | null = null;
 
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
@@ -60,9 +40,7 @@ async function getJson<T>(url: string): Promise<T> {
     });
 
     if (response.ok) {
-      const data = (await response.json()) as T;
-      writeCache(url, data);
-      return data;
+      return (await response.json()) as T;
     }
 
     const message = `BC Parks API ${response.status} for ${url}`;
@@ -76,6 +54,20 @@ async function getJson<T>(url: string): Promise<T> {
   }
 
   throw lastError ?? new Error(`BC Parks API failed for ${url}`);
+}
+
+async function getJson<T>(url: string): Promise<T> {
+  const existing = inflightGets.get(url);
+  if (existing) return existing as Promise<T>;
+
+  const request = fetchJsonWithRetry<T>(url).finally(() => {
+    if (inflightGets.get(url) === request) {
+      inflightGets.delete(url);
+    }
+  });
+
+  inflightGets.set(url, request);
+  return request;
 }
 
 export async function listResourceLocations(): Promise<ResourceLocation[]> {
@@ -333,7 +325,10 @@ type ResourceNamePayload = Record<
   }
 >;
 
-const resourceNameCache = new Map<number, CacheEntry>();
+const resourceNameCache = new Map<
+  number,
+  { expires: number; value: Record<string, string> }
+>();
 const RESOURCE_NAME_TTL_MS = 6 * 60 * 60 * 1000;
 
 /**
@@ -345,7 +340,7 @@ export async function fetchResourceNames(
 ): Promise<Record<string, string>> {
   const hit = resourceNameCache.get(resourceLocationId);
   if (hit && hit.expires > Date.now()) {
-    return hit.value as Record<string, string>;
+    return hit.value;
   }
 
   const url = `${BCPARKS_BASE}/api/resourceLocation/resources?resourceLocationId=${resourceLocationId}`;

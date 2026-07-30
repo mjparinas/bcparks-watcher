@@ -883,7 +883,7 @@ export function Dashboard() {
           >
             Auto{" "}
             {autoRefresh
-              ? `${config?.pollIntervalMinutes ?? 5} mins`
+              ? `${config?.pollIntervalMinutes ?? 10} mins`
               : "off"}
           </button>
           {notifyPermission !== "granted" &&

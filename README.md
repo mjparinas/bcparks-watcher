@@ -76,7 +76,7 @@ Date range is `startDate` → `endDate` (exclusive). Stays must arrive on/after 
 ## Periodic checks
 
 1. **Dashboard auto-refresh** — controlled by `pollIntervalMinutes`
-2. **Vercel Cron** — [`vercel.json`](vercel.json) hits `/api/cron` every 5 minutes
+2. **Vercel Cron** — [`vercel.json`](vercel.json) hits `/api/cron` every 10 minutes
 3. **Webhook alerts** — set `NOTIFY_WEBHOOK_URL` in `.env.local` (Slack/Discord-compatible JSON `{ text }` / `{ content }`)
 4. **Browser notifications** — click **Enable alerts** on the dashboard
 

@@ -3,6 +3,7 @@ import {
   streamAvailabilityCheck,
 } from "@/lib/bcparks/check";
 import type { AvailabilityReport, CheckEvent } from "@/lib/bcparks/types";
+import type { NextRequest } from "next/server";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 120;
@@ -11,7 +12,15 @@ function encodeSse(event: CheckEvent): string {
   return `data: ${JSON.stringify(event)}\n\n`;
 }
 
-export async function GET() {
+export async function GET(request: NextRequest) {
+  const parksParam = request.nextUrl.searchParams.get("parks");
+  const shortNames = parksParam
+    ? parksParam
+        .split(",")
+        .map((name) => name.trim())
+        .filter(Boolean)
+    : undefined;
+
   const encoder = new TextEncoder();
 
   const stream = new ReadableStream<Uint8Array>({
@@ -19,7 +28,9 @@ export async function GET() {
       let reportForNotify: AvailabilityReport | null = null;
 
       try {
-        for await (const event of streamAvailabilityCheck()) {
+        for await (const event of streamAvailabilityCheck(undefined, {
+          shortNames,
+        })) {
           controller.enqueue(encoder.encode(encodeSse(event)));
           if (event.type === "done") {
             reportForNotify = event.report;

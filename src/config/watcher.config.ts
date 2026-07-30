@@ -261,8 +261,12 @@ export const watcherConfig: WatcherConfig = {
 /** Parks that pass enabled / drive-time / ferry / toll filters. */
 export function getActiveParks(
   config: WatcherConfig = watcherConfig,
+  options?: { shortNames?: string[] },
 ): ParkConfig[] {
   const maxDrive = config.maxDriveMinutesFromHome;
+  const allowList = options?.shortNames?.length
+    ? new Set(options.shortNames)
+    : null;
 
   return config.parks
     .filter((park) => park.enabled)
@@ -273,6 +277,7 @@ export function getActiveParks(
       if (park.driveMinutesFromHome == null) return true;
       return park.driveMinutesFromHome <= maxDrive;
     })
+    .filter((park) => (allowList ? allowList.has(park.shortName) : true))
     .sort(
       (a, b) =>
         (a.driveMinutesFromHome ?? Number.MAX_SAFE_INTEGER) -

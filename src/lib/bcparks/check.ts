@@ -177,9 +177,12 @@ async function checkParkWindow(
  */
 export async function* streamAvailabilityCheck(
   overrides?: Partial<WatcherConfig>,
+  options?: { shortNames?: string[] },
 ): AsyncGenerator<CheckEvent> {
   const config = resolveConfig(overrides);
-  const enabledParks = getActiveParks(config);
+  const enabledParks = getActiveParks(config, {
+    shortNames: options?.shortNames,
+  });
   const windows = getWeekendWindowsInRange(
     config.startDate,
     config.endDate,
@@ -191,6 +194,18 @@ export async function* streamAvailabilityCheck(
   const meta = buildMeta(config, enabledParks, total);
 
   yield { type: "meta", meta };
+
+  if (enabledParks.length === 0) {
+    yield {
+      type: "done",
+      report: {
+        ...meta,
+        weekends: [],
+        errors: [],
+      },
+    };
+    return;
+  }
 
   let index = 0;
   for (const park of enabledParks) {

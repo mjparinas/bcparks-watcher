@@ -108,8 +108,15 @@ export function Dashboard() {
   const [selectedParks, setSelectedParks] = useState<Set<string>>(new Set());
   const previousHits = useRef<Set<string>>(new Set());
   const abortRef = useRef<AbortController | null>(null);
+  const selectedParksRef = useRef(selectedParks);
 
-  const load = useCallback(async () => {
+  useEffect(() => {
+    selectedParksRef.current = selectedParks;
+  }, [selectedParks]);
+
+  const load = useCallback(async (parksOverride?: Set<string>) => {
+    const parksToCheck = parksOverride ?? selectedParksRef.current;
+
     abortRef.current?.abort();
     const controller = new AbortController();
     abortRef.current = controller;
@@ -119,9 +126,19 @@ export function Dashboard() {
     setWeekends([]);
     setErrors([]);
     setProgress({ index: 0, total: 0 });
+    previousHits.current = new Set();
+
+    if (parksToCheck.size === 0) {
+      setIsChecking(false);
+      return;
+    }
+
+    const params = new URLSearchParams({
+      parks: Array.from(parksToCheck).join(","),
+    });
 
     try {
-      const response = await fetch("/api/availability/stream", {
+      const response = await fetch(`/api/availability/stream?${params}`, {
         cache: "no-store",
         signal: controller.signal,
       });
@@ -158,7 +175,9 @@ export function Dashboard() {
             setProgress({ index: event.index, total: event.total });
             setWeekends((current) =>
               sortWeekends([
-                ...current.filter((item) => resultKey(item) !== resultKey(event.result)),
+                ...current.filter(
+                  (item) => resultKey(item) !== resultKey(event.result),
+                ),
                 event.result,
               ]),
             );
@@ -193,7 +212,8 @@ export function Dashboard() {
               maxDriveMinutesFromHome: event.report.maxDriveMinutesFromHome,
               party: event.report.party,
               parksChecked: event.report.parksChecked,
-              totalChecks: event.report.weekends.length + event.report.errors.length,
+              totalChecks:
+                event.report.weekends.length + event.report.errors.length,
             });
             setWeekends(event.report.weekends);
             setErrors(event.report.errors);
@@ -230,8 +250,10 @@ export function Dashboard() {
       .then((response) => response.json())
       .then((data: PublicConfig) => {
         if (cancelled) return;
+        const parks = new Set(data.parks.map((park) => park.shortName));
         setConfig(data);
-        setSelectedParks(new Set(data.parks.map((park) => park.shortName)));
+        setSelectedParks(parks);
+        void load(parks);
       })
       .catch(() => {
         if (!cancelled) setConfig(null);
@@ -250,13 +272,8 @@ export function Dashboard() {
       });
     }
 
-    const timer = window.setTimeout(() => {
-      void load();
-    }, 0);
-
     return () => {
       cancelled = true;
-      window.clearTimeout(timer);
       abortRef.current?.abort();
     };
   }, [load]);
@@ -281,13 +298,12 @@ export function Dashboard() {
       const next = new Set(current);
       if (next.has(shortName)) next.delete(shortName);
       else next.add(shortName);
+      void load(next);
       return next;
     });
   };
 
-  const fullHits = weekends.filter(
-    (w) => w.hasFullWeekend && selectedParks.has(w.parkShortName),
-  );
+  const fullHits = weekends.filter((w) => w.hasFullWeekend);
   const progressLabel =
     isChecking && progress.total > 0
       ? `Checking ${progress.index}/${progress.total}`

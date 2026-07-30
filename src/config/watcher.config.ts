@@ -70,9 +70,39 @@ export type PartyOverrides = {
   cars?: number;
 };
 
+export type DateOverrides = {
+  startDate?: string;
+  endDate?: string;
+};
+
+const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
+
 function clampInt(value: number, min: number, max: number): number {
   if (!Number.isFinite(value)) return min;
   return Math.min(max, Math.max(min, Math.trunc(value)));
+}
+
+/** Local calendar date in the home-base timezone (YYYY-MM-DD). */
+export function todayInHomeTimezone(
+  timeZone = "America/Vancouver",
+): string {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(new Date());
+}
+
+export function isIsoDate(value: string | null | undefined): value is string {
+  if (!value || !ISO_DATE.test(value)) return false;
+  const [y, m, d] = value.split("-").map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  return (
+    dt.getUTCFullYear() === y &&
+    dt.getUTCMonth() === m - 1 &&
+    dt.getUTCDate() === d
+  );
 }
 
 /** Keep kid ages aligned when the kids count changes. */
@@ -128,6 +158,28 @@ export function applyPartyOverrides(
     subEquipmentCategoryId: tentSubEquipmentCategoryId(tents),
     numEquipment: tents,
   };
+}
+
+/** Apply search-window overrides; default start is always "today" in Vancouver. */
+export function applyDateOverrides(
+  config: WatcherConfig,
+  overrides?: DateOverrides,
+): WatcherConfig {
+  let startDate = isIsoDate(overrides?.startDate)
+    ? overrides!.startDate!
+    : todayInHomeTimezone();
+  let endDate = isIsoDate(overrides?.endDate)
+    ? overrides!.endDate!
+    : config.endDate;
+
+  if (startDate >= endDate) {
+    // Keep a valid exclusive window: bump end one day past start.
+    const [y, m, d] = startDate.split("-").map(Number);
+    const next = new Date(Date.UTC(y, m - 1, d + 1));
+    endDate = next.toISOString().slice(0, 10);
+  }
+
+  return { ...config, startDate, endDate };
 }
 
 export type WatcherConfig = {
@@ -194,7 +246,7 @@ export const watcherConfig: WatcherConfig = {
   excludeFerry: true,
   excludeTollRoads: true,
 
-  // Today → day school starts (BC districts: Tue Sep 8, 2026)
+  // Default window: today → day school starts (refreshed at request time)
   startDate: "2026-07-29",
   endDate: "2026-09-08",
   endDateLabel: "BC school start (Tue Sep 8, 2026)",

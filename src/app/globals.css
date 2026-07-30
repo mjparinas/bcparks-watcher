@@ -158,6 +158,41 @@ code {
   letter-spacing: 0.04em;
   text-transform: uppercase;
   color: var(--ink-soft);
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.4rem;
+}
+
+.stepper-hint {
+  font-style: normal;
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: none;
+  font-size: 0.68rem;
+  color: rgba(74, 92, 82, 0.75);
+}
+
+.date-field {
+  min-width: 9.5rem;
+}
+
+.date-input {
+  appearance: none;
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 0.55rem;
+  background: rgba(255, 255, 255, 0.85);
+  color: var(--ink);
+  font: inherit;
+  font-size: 0.92rem;
+  font-weight: 650;
+  padding: 0.35rem 0.45rem;
+}
+
+.date-input:focus {
+  outline: 2px solid rgba(47, 107, 79, 0.35);
+  outline-offset: 1px;
 }
 
 .stepper-controls {

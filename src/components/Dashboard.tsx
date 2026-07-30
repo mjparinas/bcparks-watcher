@@ -100,11 +100,21 @@ type PartySettings = {
   cars: number;
 };
 
+type DateSettings = {
+  startDate: string;
+  endDate: string;
+};
+
 const DEFAULT_PARTY: PartySettings = {
   adults: 2,
   kids: 2,
   tents: 1,
   cars: 1,
+};
+
+const DEFAULT_DATES: DateSettings = {
+  startDate: "2026-07-29",
+  endDate: "2026-09-08",
 };
 
 function partyFromConfig(config: PublicConfig): PartySettings {
@@ -113,6 +123,13 @@ function partyFromConfig(config: PublicConfig): PartySettings {
     kids: config.party?.kidsAges?.length ?? DEFAULT_PARTY.kids,
     tents: config.party?.tents ?? config.equipment?.tents ?? DEFAULT_PARTY.tents,
     cars: config.party?.cars ?? config.equipment?.cars ?? DEFAULT_PARTY.cars,
+  };
+}
+
+function datesFromConfig(config: PublicConfig): DateSettings {
+  return {
+    startDate: config.startDate || DEFAULT_DATES.startDate,
+    endDate: config.endDate || DEFAULT_DATES.endDate,
   };
 }
 
@@ -145,12 +162,14 @@ export function Dashboard() {
   >("default");
   const [selectedParks, setSelectedParks] = useState<Set<string>>(new Set());
   const [party, setParty] = useState<PartySettings>(DEFAULT_PARTY);
-  const [partyReady, setPartyReady] = useState(false);
+  const [dates, setDates] = useState<DateSettings>(DEFAULT_DATES);
+  const [settingsReady, setSettingsReady] = useState(false);
   const previousHits = useRef<Set<string>>(new Set());
   const abortRef = useRef<AbortController | null>(null);
   const selectedParksRef = useRef(selectedParks);
   const partyRef = useRef(party);
-  const skipPartyReload = useRef(true);
+  const datesRef = useRef(dates);
+  const skipSettingsReload = useRef(true);
 
   useEffect(() => {
     selectedParksRef.current = selectedParks;
@@ -160,9 +179,14 @@ export function Dashboard() {
     partyRef.current = party;
   }, [party]);
 
+  useEffect(() => {
+    datesRef.current = dates;
+  }, [dates]);
+
   const load = useCallback(async (parksOverride?: Set<string>) => {
     const parksToCheck = parksOverride ?? selectedParksRef.current;
     const partyToUse = partyRef.current;
+    const datesToUse = datesRef.current;
 
     abortRef.current?.abort();
     const controller = new AbortController();
@@ -186,6 +210,8 @@ export function Dashboard() {
       kids: String(partyToUse.kids),
       tents: String(partyToUse.tents),
       cars: String(partyToUse.cars),
+      startDate: datesToUse.startDate,
+      endDate: datesToUse.endDate,
     });
 
     try {
@@ -303,11 +329,14 @@ export function Dashboard() {
         if (cancelled) return;
         const parks = new Set(data.parks.map((park) => park.shortName));
         const nextParty = partyFromConfig(data);
+        const nextDates = datesFromConfig(data);
         setConfig(data);
         setSelectedParks(parks);
         setParty(nextParty);
+        setDates(nextDates);
         partyRef.current = nextParty;
-        setPartyReady(true);
+        datesRef.current = nextDates;
+        setSettingsReady(true);
         void load(parks);
       })
       .catch(() => {
@@ -344,20 +373,28 @@ export function Dashboard() {
     return () => window.clearInterval(id);
   }, [autoRefresh, config, load]);
 
-  // Restart search when party settings change (after initial load from config).
+  // Restart search when party or date settings change (after initial load).
   useEffect(() => {
-    if (!partyReady || !config) return;
-    if (skipPartyReload.current) {
-      skipPartyReload.current = false;
+    if (!settingsReady || !config) return;
+    if (skipSettingsReload.current) {
+      skipSettingsReload.current = false;
       return;
     }
     const id = window.setTimeout(() => {
       void load();
     }, 350);
     return () => window.clearTimeout(id);
-    // Intentionally keyed on party fields only — not load/config identity.
+    // Intentionally keyed on settings fields only — not load/config identity.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [party.adults, party.kids, party.tents, party.cars, partyReady]);
+  }, [
+    party.adults,
+    party.kids,
+    party.tents,
+    party.cars,
+    dates.startDate,
+    dates.endDate,
+    settingsReady,
+  ]);
 
   const requestNotifications = async () => {
     if (!("Notification" in window)) return;
@@ -382,11 +419,34 @@ export function Dashboard() {
     setParty((current) => ({ ...current, [key]: value }));
   };
 
+  const updateDates = <K extends keyof DateSettings>(
+    key: K,
+    value: DateSettings[K],
+  ) => {
+    setDates((current) => {
+      const next = { ...current, [key]: value };
+      if (key === "startDate" && value >= next.endDate) {
+        const [y, m, d] = value.split("-").map(Number);
+        const bumped = new Date(Date.UTC(y, m - 1, d + 1));
+        next.endDate = bumped.toISOString().slice(0, 10);
+      }
+      if (key === "endDate" && value <= next.startDate) {
+        const [y, m, d] = value.split("-").map(Number);
+        const bumped = new Date(Date.UTC(y, m - 1, d - 1));
+        next.startDate = bumped.toISOString().slice(0, 10);
+      }
+      return next;
+    });
+  };
+
   const fullHits = weekends.filter((w) => w.hasFullWeekend);
   const progressLabel =
     isChecking && progress.total > 0
       ? `Checking ${progress.index}/${progress.total}`
       : null;
+
+  const activeStart = meta?.startDate ?? dates.startDate;
+  const activeEnd = meta?.endDate ?? dates.endDate;
 
   return (
     <div className="page-shell">
@@ -394,7 +454,7 @@ export function Dashboard() {
         <p className="brand">BC Parks Watcher</p>
         <h1>
           {config
-            ? `Fri–Sun · ${formatRangeLabel(config.startDate, config.endDate)}`
+            ? `Fri–Sun · ${formatRangeLabel(activeStart, activeEnd)}`
             : "Weekend availability"}
         </h1>
         <p className="lede">
@@ -404,8 +464,7 @@ export function Dashboard() {
             : "range"}{" "}
           of {config?.homeBase || "home"} for Friday→Sunday stays
           {config?.endDateLabel ? ` until ${config.endDateLabel}` : ""}.
-          Showing same-site Fri+Sat availability only. Edit{" "}
-          <code>src/config/watcher.config.ts</code> to change parks or times.
+          Showing same-site Fri+Sat availability only.
         </p>
 
         <div className="actions">
@@ -452,7 +511,20 @@ export function Dashboard() {
           {` · ${formatPartyLabel(party, meta?.party?.kidsAges ?? config?.party?.kidsAges)}`}
         </p>
 
-        <div className="party-controls" role="group" aria-label="Party size">
+        <div className="party-controls" role="group" aria-label="Search settings">
+          <DateField
+            label="From"
+            value={dates.startDate}
+            max={dates.endDate}
+            onChange={(value) => updateDates("startDate", value)}
+          />
+          <DateField
+            label="Until"
+            hint="school start"
+            value={dates.endDate}
+            min={dates.startDate}
+            onChange={(value) => updateDates("endDate", value)}
+          />
           <Stepper
             label="Adults"
             value={party.adults}
@@ -557,6 +629,39 @@ export function Dashboard() {
         </section>
       ) : null}
     </div>
+  );
+}
+
+function DateField({
+  label,
+  hint,
+  value,
+  min,
+  max,
+  onChange,
+}: {
+  label: string;
+  hint?: string;
+  value: string;
+  min?: string;
+  max?: string;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <label className="stepper date-field">
+      <span className="stepper-label">
+        {label}
+        {hint ? <em className="stepper-hint">{hint}</em> : null}
+      </span>
+      <input
+        type="date"
+        className="date-input"
+        value={value}
+        min={min}
+        max={max}
+        onChange={(event) => onChange(event.target.value)}
+      />
+    </label>
   );
 }
 

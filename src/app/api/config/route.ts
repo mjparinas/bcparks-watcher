@@ -1,10 +1,15 @@
 import { NextResponse } from "next/server";
-import { getActiveParks, watcherConfig } from "@/config/watcher.config";
+import {
+  applyDateOverrides,
+  getActiveParks,
+  watcherConfig,
+} from "@/config/watcher.config";
 
 export const dynamic = "force-dynamic";
 
 export async function GET() {
-  const parks = getActiveParks().map((park) => ({
+  const config = applyDateOverrides(watcherConfig);
+  const parks = getActiveParks(config).map((park) => ({
     name: park.name,
     shortName: park.shortName,
     resourceLocationId: park.resourceLocationId,
@@ -13,25 +18,23 @@ export async function GET() {
   }));
 
   return NextResponse.json({
-    homeBase: watcherConfig.homeBase,
-    maxDriveMinutesFromHome: watcherConfig.maxDriveMinutesFromHome,
-    excludeFerry: watcherConfig.excludeFerry,
-    excludeTollRoads: watcherConfig.excludeTollRoads,
-    startDate: watcherConfig.startDate,
-    endDate: watcherConfig.endDate,
-    endDateLabel: watcherConfig.endDateLabel,
-    nights: watcherConfig.nights,
-    pollIntervalMinutes: watcherConfig.pollIntervalMinutes,
-    party: watcherConfig.party,
-    partySize: watcherConfig.partySize,
+    homeBase: config.homeBase,
+    maxDriveMinutesFromHome: config.maxDriveMinutesFromHome,
+    excludeFerry: config.excludeFerry,
+    excludeTollRoads: config.excludeTollRoads,
+    startDate: config.startDate,
+    endDate: config.endDate,
+    endDateLabel: config.endDateLabel,
+    nights: config.nights,
+    pollIntervalMinutes: config.pollIntervalMinutes,
+    party: config.party,
+    partySize: config.partySize,
     equipment: {
-      tents: watcherConfig.party.tents,
-      cars: watcherConfig.party.cars,
-      subEquipmentCategoryId: watcherConfig.subEquipmentCategoryId,
+      tents: config.party.tents,
+      cars: config.party.cars,
+      subEquipmentCategoryId: config.subEquipmentCategoryId,
       label:
-        watcherConfig.party.tents === 1
-          ? "1 Tent"
-          : `${watcherConfig.party.tents} Tents`,
+        config.party.tents === 1 ? "1 Tent" : `${config.party.tents} Tents`,
     },
     parks,
   });

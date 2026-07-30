@@ -3,7 +3,11 @@ import {
   streamAvailabilityCheck,
 } from "@/lib/bcparks/check";
 import type { AvailabilityReport, CheckEvent } from "@/lib/bcparks/types";
-import type { PartyOverrides } from "@/config/watcher.config";
+import {
+  isIsoDate,
+  type DateOverrides,
+  type PartyOverrides,
+} from "@/config/watcher.config";
 import type { NextRequest } from "next/server";
 
 export const dynamic = "force-dynamic";
@@ -13,9 +17,7 @@ function encodeSse(event: CheckEvent): string {
   return `data: ${JSON.stringify(event)}\n\n`;
 }
 
-function parseIntParam(
-  value: string | null,
-): number | undefined {
+function parseIntParam(value: string | null): number | undefined {
   if (value == null || value === "") return undefined;
   const n = Number(value);
   return Number.isFinite(n) ? n : undefined;
@@ -29,16 +31,23 @@ function parsePartyOverrides(
   const tents = parseIntParam(searchParams.get("tents"));
   const cars = parseIntParam(searchParams.get("cars"));
 
-  if (
-    adults == null &&
-    kids == null &&
-    tents == null &&
-    cars == null
-  ) {
+  if (adults == null && kids == null && tents == null && cars == null) {
     return undefined;
   }
 
   return { adults, kids, tents, cars };
+}
+
+function parseDateOverrides(
+  searchParams: URLSearchParams,
+): DateOverrides | undefined {
+  const startDateRaw = searchParams.get("startDate");
+  const endDateRaw = searchParams.get("endDate");
+  const startDate = isIsoDate(startDateRaw) ? startDateRaw : undefined;
+  const endDate = isIsoDate(endDateRaw) ? endDateRaw : undefined;
+
+  if (startDate == null && endDate == null) return undefined;
+  return { startDate, endDate };
 }
 
 export async function GET(request: NextRequest) {
@@ -51,6 +60,7 @@ export async function GET(request: NextRequest) {
     : undefined;
 
   const partyOverrides = parsePartyOverrides(request.nextUrl.searchParams);
+  const dateOverrides = parseDateOverrides(request.nextUrl.searchParams);
   const encoder = new TextEncoder();
 
   const stream = new ReadableStream<Uint8Array>({
@@ -59,7 +69,11 @@ export async function GET(request: NextRequest) {
 
       try {
         for await (const event of streamAvailabilityCheck(
-          partyOverrides ? { partyOverrides } : undefined,
+          {
+            ...(partyOverrides ? { partyOverrides } : {}),
+            // Always apply date resolution so start defaults to today
+            dateOverrides: dateOverrides ?? {},
+          },
           { shortNames },
         )) {
           controller.enqueue(encoder.encode(encodeSse(event)));

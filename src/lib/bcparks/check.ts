@@ -1,7 +1,9 @@
 import {
+  applyDateOverrides,
   applyPartyOverrides,
   getActiveParks,
   watcherConfig,
+  type DateOverrides,
   type ParkConfig,
   type PartyOverrides,
   type WatcherConfig,
@@ -28,10 +30,13 @@ import {
 
 export type { CheckEvent, CheckMeta };
 
-function resolveConfig(
-  overrides?: Partial<WatcherConfig> & { partyOverrides?: PartyOverrides },
-): WatcherConfig {
-  const { partyOverrides, ...rest } = overrides ?? {};
+export type CheckOverrides = Partial<WatcherConfig> & {
+  partyOverrides?: PartyOverrides;
+  dateOverrides?: DateOverrides;
+};
+
+function resolveConfig(overrides?: CheckOverrides): WatcherConfig {
+  const { partyOverrides, dateOverrides, ...rest } = overrides ?? {};
   const base: WatcherConfig = {
     ...watcherConfig,
     ...rest,
@@ -40,7 +45,10 @@ function resolveConfig(
     party: rest.party ?? watcherConfig.party,
   };
 
-  return applyPartyOverrides(base, partyOverrides);
+  return applyPartyOverrides(
+    applyDateOverrides(base, dateOverrides),
+    partyOverrides,
+  );
 }
 
 function sortWeekends(weekends: WeekendResult[]): WeekendResult[] {
@@ -183,7 +191,7 @@ async function checkParkWindow(
  * Yields availability results one park/weekend at a time for progressive UI.
  */
 export async function* streamAvailabilityCheck(
-  overrides?: Partial<WatcherConfig> & { partyOverrides?: PartyOverrides },
+  overrides?: CheckOverrides,
   options?: { shortNames?: string[] },
 ): AsyncGenerator<CheckEvent> {
   const config = resolveConfig(overrides);
@@ -243,7 +251,7 @@ export async function* streamAvailabilityCheck(
 }
 
 export async function runAvailabilityCheck(
-  overrides?: Partial<WatcherConfig> & { partyOverrides?: PartyOverrides },
+  overrides?: CheckOverrides,
 ): Promise<AvailabilityReport> {
   let report: AvailabilityReport | null = null;
 

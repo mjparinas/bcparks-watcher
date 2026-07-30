@@ -418,6 +418,18 @@ export function Dashboard() {
 
   const activeStart = meta?.startDate ?? dates.startDate;
   const activeEnd = meta?.endDate ?? dates.endDate;
+  const selectedCount = selectedParks.size;
+  const totalParks = config?.parks.length ?? 0;
+  const parkWatchLabel =
+    totalParks === 0
+      ? "…"
+      : selectedCount === totalParks
+        ? `${selectedCount}`
+        : `${selectedCount} of ${totalParks}`;
+  const peopleLabel =
+    party.partySize === 1 ? "1 person" : `${party.partySize} people`;
+  const tentLabel =
+    party.tents === 1 ? "1 tent" : `${party.tents} tents`;
 
   return (
     <div className="page-shell">
@@ -429,13 +441,13 @@ export function Dashboard() {
             : "Weekend availability"}
         </h1>
         <p className="lede">
-          Watching {config?.parks.length ?? "…"} parks within{" "}
+          Watching {parkWatchLabel} parks
           {config?.maxDriveMinutesFromHome
-            ? `${Math.round(config.maxDriveMinutesFromHome / 60)} hours`
-            : "range"}{" "}
-          of {config?.homeBase || "home"} for Friday→Sunday stays
-          {config?.endDateLabel ? ` until ${config.endDateLabel}` : ""}.
-          Showing same-site Fri+Sat availability only.
+            ? ` within ${Math.round(config.maxDriveMinutesFromHome / 60)} hours`
+            : ""}{" "}
+          of {config?.homeBase || "home"} for Friday→Sunday stays{" "}
+          {formatRangeLabel(dates.startDate, dates.endDate)} · {peopleLabel},{" "}
+          {tentLabel}. Showing same-site Fri+Sat availability only.
         </p>
 
         <div className="actions">

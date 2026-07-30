@@ -12,7 +12,7 @@ import {
   type NightAvailability,
   type WeekendResult,
 } from "./types";
-import { buildBookingUrl, fetchParkDailyAvailability } from "./client";
+import { buildBookingUrl, fetchParkAvailability } from "./client";
 import {
   dayName,
   formatDate,
@@ -71,6 +71,10 @@ function buildMeta(
   };
 }
 
+/**
+ * A "full weekend" means the SAME campsite is reservable for every night
+ * in the stay (continuous booking), not different sites on different nights.
+ */
 async function checkParkWindow(
   config: WatcherConfig,
   park: ParkConfig,
@@ -80,7 +84,8 @@ async function checkParkWindow(
   const endDateApi = formatDate(window.nights[window.nights.length - 1]);
   const departureDate = formatDate(window.departure);
 
-  const siteNights = await fetchParkDailyAvailability({
+  // Continuous stay = same site bookable for the whole Fri→Sun window
+  const continuous = await fetchParkAvailability({
     rootMapId: park.rootMapId,
     resourceLocationId: park.resourceLocationId,
     startDate,
@@ -90,29 +95,20 @@ async function checkParkWindow(
     subEquipmentCategoryId: config.subEquipmentCategoryId,
     numEquipment: config.numEquipment,
     mapIds: park.mapIds,
+    getDailyAvailability: false,
   });
 
-  const nightCounts = window.nights.map(() => 0);
   let fullWeekendSites = 0;
-
-  for (const nights of Object.values(siteNights)) {
-    if (nights.length < window.nights.length) continue;
-
-    let allOpen = true;
-    for (let i = 0; i < window.nights.length; i++) {
-      if (nights[i] === AVAILABILITY_OPEN) {
-        nightCounts[i] += 1;
-      } else {
-        allOpen = false;
-      }
+  for (const stayCodes of Object.values(continuous)) {
+    if (stayCodes.some((code) => code === AVAILABILITY_OPEN)) {
+      fullWeekendSites += 1;
     }
-    if (allOpen) fullWeekendSites += 1;
   }
 
-  const nights: NightAvailability[] = window.nights.map((date, i) => ({
+  const nights: NightAvailability[] = window.nights.map((date) => ({
     date: formatDate(date),
     dayOfWeek: dayName(date),
-    availableSites: nightCounts[i],
+    availableSites: fullWeekendSites,
   }));
 
   return {
@@ -134,7 +130,7 @@ async function checkParkWindow(
       equipmentCategoryId: config.equipmentCategoryId,
       subEquipmentCategoryId: config.subEquipmentCategoryId,
     }),
-    hasAnyAvailability: nightCounts.some((count) => count > 0),
+    hasAnyAvailability: fullWeekendSites > 0,
     hasFullWeekend: fullWeekendSites > 0,
   };
 }

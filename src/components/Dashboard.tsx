@@ -278,7 +278,7 @@ export function Dashboard() {
             : "range"}{" "}
           of {config?.homeBase || "home"} for Friday→Sunday stays
           {config?.endDateLabel ? ` until ${config.endDateLabel}` : ""}.
-          Showing full Fri+Sat availability only. Edit{" "}
+          Showing same-site Fri+Sat availability only. Edit{" "}
           <code>src/config/watcher.config.ts</code> to change parks or times.
         </p>
 
@@ -352,12 +352,12 @@ export function Dashboard() {
 
       <section className={`section ${fullHits.length > 0 ? "highlight" : ""}`}>
         <h2>Open full weekends</h2>
-        <p className="section-copy">
+          <p className="section-copy">
           {fullHits.length > 0
-            ? "Both Friday and Saturday nights are open — book quickly."
+            ? "Same campsite open for both Friday and Saturday nights — book quickly."
             : isChecking
-              ? "Still scanning… full openings will show up here as soon as they’re found."
-              : `No full Fri+Sat openings across ${weekends.length || "checked"} park/weekend combos.`}
+              ? "Still scanning… same-site Fri+Sat openings will show up here as they’re found."
+              : `No same-site Fri+Sat openings across ${weekends.length || "checked"} park/weekend combos.`}
         </p>
         {fullHits.length > 0 ? (
           <div className="result-list">

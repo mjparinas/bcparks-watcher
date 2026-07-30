@@ -91,9 +91,12 @@ function buildMapUrl(query: MapQuery): string {
 }
 
 /**
- * Recursively walk park map tree and merge per-site daily availability.
+ * Recursively walk park map tree and merge per-site availability.
+ * When getDailyAvailability is true, each site maps to one code per night.
+ * When false, each site maps to a single code for the whole stay window
+ * (same campsite bookable for the entire Friday→Sunday reservation).
  */
-export async function fetchParkDailyAvailability(options: {
+export async function fetchParkAvailability(options: {
   rootMapId: number;
   resourceLocationId: number;
   startDate: string;
@@ -102,6 +105,7 @@ export async function fetchParkDailyAvailability(options: {
   equipmentCategoryId: number;
   subEquipmentCategoryId?: number;
   numEquipment?: number;
+  getDailyAvailability: boolean;
   /** If set, only these map nodes are queried (no auto-discovery). */
   mapIds?: number[];
 }): Promise<Record<string, number[]>> {
@@ -122,7 +126,7 @@ export async function fetchParkDailyAvailability(options: {
         equipmentCategoryId: options.equipmentCategoryId,
         subEquipmentCategoryId: options.subEquipmentCategoryId,
         numEquipment,
-        getDailyAvailability: true,
+        getDailyAvailability: options.getDailyAvailability,
       }),
     );
 
@@ -147,6 +151,24 @@ export async function fetchParkDailyAvailability(options: {
   }
 
   return siteNights;
+}
+
+/** @deprecated Prefer fetchParkAvailability */
+export async function fetchParkDailyAvailability(options: {
+  rootMapId: number;
+  resourceLocationId: number;
+  startDate: string;
+  endDate: string;
+  partySize: number;
+  equipmentCategoryId: number;
+  subEquipmentCategoryId?: number;
+  numEquipment?: number;
+  mapIds?: number[];
+}): Promise<Record<string, number[]>> {
+  return fetchParkAvailability({
+    ...options,
+    getDailyAvailability: true,
+  });
 }
 
 export function buildBookingUrl(options: {

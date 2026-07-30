@@ -6,7 +6,9 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "lookup": "node scripts/lookup-parks.mjs",
+    "check": "node scripts/run-check.mjs"
   },
   "dependencies": {
     "next": "16.2.12",

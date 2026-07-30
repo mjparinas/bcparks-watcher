@@ -1,36 +1,88 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# BC Parks Weekend Watcher
 
-## Getting Started
+Next.js app that periodically checks [camping.bcparks.ca](https://camping.bcparks.ca) for weekend campsite availability.
 
-First, run the development server:
+Default watch list:
+
+- **E. C. Manning Provincial Park**
+- **Sasquatch Provincial Park**
+- **August 2026** Friday / Saturday / Sunday nights
+
+## Quick start
 
 ```bash
+npm install
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open [http://localhost:3000](http://localhost:3000). The dashboard auto-refreshes on the interval in config.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Adjust locations and times
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+Edit one file: [`src/config/watcher.config.ts`](src/config/watcher.config.ts)
 
-## Learn More
+```ts
+export const watcherConfig = {
+  year: 2026,
+  month: 8, // August
+  nights: ["friday", "saturday", "sunday"],
+  pollIntervalMinutes: 5,
+  partySize: 2,
+  parks: [
+    {
+      name: "E. C. Manning Provincial Park",
+      shortName: "Manning",
+      resourceLocationId: -2147483618,
+      rootMapId: -2147483601,
+      enabled: true,
+    },
+    // add / disable parks here
+  ],
+};
+```
 
-To learn more about Next.js, take a look at the following resources:
+### Find another park’s IDs
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+```bash
+npm run lookup -- "garibaldi"
+# or while the app is running:
+# GET /api/parks?q=garibaldi
+```
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+Copy the printed object into `parks`.
 
-## Deploy on Vercel
+### Change the weekend definition
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+`nights` is the list of overnight dates to require. Examples:
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+- Fri–Sun: `["friday", "saturday", "sunday"]`
+- Sat only: `["saturday"]`
+- Thu–Sat: `["thursday", "friday", "saturday"]`
+
+## API routes
+
+| Route | Purpose |
+| --- | --- |
+| `GET /api/availability` | Run a live check and return the full report |
+| `GET /api/cron` | Same check for schedulers / Vercel Cron |
+| `GET /api/parks?q=` | Search park IDs by name |
+| `GET /api/config` | Public view of the active config |
+
+## Periodic checks
+
+1. **Dashboard auto-refresh** — controlled by `pollIntervalMinutes`
+2. **Vercel Cron** — [`vercel.json`](vercel.json) hits `/api/cron` every 5 minutes
+3. **Webhook alerts** — set `NOTIFY_WEBHOOK_URL` in `.env.local` (Slack/Discord-compatible JSON `{ text }` / `{ content }`)
+4. **Browser notifications** — click **Enable alerts** on the dashboard
+
+Optional env vars (see `.env.example`):
+
+- `NOTIFY_WEBHOOK_URL`
+- `CRON_SECRET` — require `Authorization: Bearer <secret>` on `/api/cron`
+
+## Notes
+
+- Data comes from the public GoingToCamp API used by camping.bcparks.ca. It can change without notice.
+- Be polite with polling frequency; 5+ minutes is recommended.
+- “Full” means at least one site is open on **every** selected night for that weekend.
+- Book links open the official BC Parks reservation flow.

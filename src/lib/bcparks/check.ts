@@ -10,7 +10,11 @@ import {
   type WeekendResult,
 } from "./types";
 import { buildBookingUrl, fetchParkDailyAvailability } from "./client";
-import { dayName, formatDate, getWeekendWindows } from "./weekends";
+import {
+  dayName,
+  formatDate,
+  getWeekendWindowsInRange,
+} from "./weekends";
 
 function resolveConfig(overrides?: Partial<WatcherConfig>): WatcherConfig {
   return {
@@ -18,6 +22,7 @@ function resolveConfig(overrides?: Partial<WatcherConfig>): WatcherConfig {
     ...overrides,
     parks: overrides?.parks ?? watcherConfig.parks,
     nights: overrides?.nights ?? watcherConfig.nights,
+    party: overrides?.party ?? watcherConfig.party,
   };
 }
 
@@ -26,7 +31,11 @@ export async function runAvailabilityCheck(
 ): Promise<AvailabilityReport> {
   const config = resolveConfig(overrides);
   const enabledParks = getActiveParks(config);
-  const windows = getWeekendWindows(config.year, config.month, config.nights);
+  const windows = getWeekendWindowsInRange(
+    config.startDate,
+    config.endDate,
+    config.nights,
+  );
   const weekends: WeekendResult[] = [];
   const errors: string[] = [];
 
@@ -45,6 +54,7 @@ export async function runAvailabilityCheck(
           partySize: config.partySize,
           equipmentCategoryId: config.equipmentCategoryId,
           subEquipmentCategoryId: config.subEquipmentCategoryId,
+          numEquipment: config.numEquipment,
           mapIds: park.mapIds,
         });
 
@@ -114,12 +124,17 @@ export async function runAvailabilityCheck(
 
   return {
     checkedAt: new Date().toISOString(),
-    year: config.year,
-    month: config.month,
+    startDate: config.startDate,
+    endDate: config.endDate,
+    endDateLabel: config.endDateLabel,
     nightLabels: config.nights,
     pollIntervalMinutes: config.pollIntervalMinutes,
     homeBase: config.homeBase,
     maxDriveMinutesFromHome: config.maxDriveMinutesFromHome,
+    party: {
+      ...config.party,
+      partySize: config.partySize,
+    },
     parksChecked: enabledParks.map((park) => ({
       shortName: park.shortName,
       driveMinutesFromHome: park.driveMinutesFromHome,

@@ -52,12 +52,20 @@ export type WeekendResult = {
 
 export type AvailabilityReport = {
   checkedAt: string;
-  year: number;
-  month: number;
+  startDate: string;
+  endDate: string;
+  endDateLabel?: string;
   nightLabels: string[];
   pollIntervalMinutes: number;
   homeBase?: string;
   maxDriveMinutesFromHome?: number;
+  party?: {
+    adults: number;
+    kidsAges: number[];
+    tents: number;
+    cars: number;
+    partySize: number;
+  };
   parksChecked: Array<{
     shortName: string;
     driveMinutesFromHome?: number;

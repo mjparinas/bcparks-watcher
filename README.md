@@ -8,9 +8,11 @@ Default watch list (≤ ~3 hours from **Langley, BC**, no ferry / no toll roads)
 - Porteau Cove, Sasquatch, Alice Lake
 - Silver Lake, Chilliwack Lake, Manning, Skagit Valley, Nairn Falls
 
+Search window: **today → BC school start** (Tue Sep 8, 2026), **Friday→Monday** stays only.
+
+Party defaults: **2 adults + kids (4 & 6)**, **1 tent**, **1 car**.
+
 Sunshine Coast and Island parks are excluded because they need BC Ferries.
-Drive times and the `maxDriveMinutesFromHome` cutoff live in config.
-`excludeFerry` / `excludeTollRoads` stay on so marked parks are skipped.
 
 ## Quick start
 
@@ -29,21 +31,14 @@ Edit one file: [`src/config/watcher.config.ts`](src/config/watcher.config.ts)
 export const watcherConfig = {
   homeBase: "Langley, BC",
   maxDriveMinutesFromHome: 180, // 3 hours
-  year: 2026,
-  month: 8, // August
-  nights: ["friday", "saturday", "sunday"],
-  pollIntervalMinutes: 5,
-  partySize: 2,
+  startDate: "2026-07-29",
+  endDate: "2026-09-08", // school start (exclusive)
+  nights: ["friday", "saturday", "sunday"], // Fri→Mon
+  partySize: 4,
+  party: { adults: 2, kidsAges: [4, 6], tents: 1, cars: 1 },
+  subEquipmentCategoryId: -32768, // 1 Tent
   parks: [
-    {
-      name: "Cultus Lake Provincial Park",
-      shortName: "Cultus Lake",
-      resourceLocationId: -2147483623,
-      rootMapId: -2147483610,
-      driveMinutesFromHome: 60,
-      enabled: true,
-    },
-    // add / disable parks here
+    // ...
   ],
 };
 ```
@@ -60,11 +55,13 @@ Copy the printed object into `parks`.
 
 ### Change the weekend definition
 
-`nights` is the list of overnight dates to require. Examples:
+`nights` is the overnight dates required. Fri→Mon stays use:
 
-- Fri–Sun: `["friday", "saturday", "sunday"]`
-- Sat only: `["saturday"]`
-- Thu–Sat: `["thursday", "friday", "saturday"]`
+```ts
+nights: ["friday", "saturday", "sunday"] // leave Monday morning
+```
+
+Date range is `startDate` → `endDate` (exclusive). Stays must arrive on/after `startDate` and depart before `endDate`.
 
 ## API routes
 

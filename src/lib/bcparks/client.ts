@@ -65,6 +65,7 @@ type MapQuery = {
   partySize: number;
   equipmentCategoryId: number;
   subEquipmentCategoryId?: number;
+  numEquipment: number;
   getDailyAvailability: boolean;
 };
 
@@ -78,7 +79,7 @@ function buildMapUrl(query: MapQuery): string {
     isReserving: "true",
     getDailyAvailability: String(query.getDailyAvailability),
     partySize: String(query.partySize),
-    numEquipment: "1",
+    numEquipment: String(query.numEquipment),
     equipmentCategoryId: String(query.equipmentCategoryId),
   });
 
@@ -100,10 +101,12 @@ export async function fetchParkDailyAvailability(options: {
   partySize: number;
   equipmentCategoryId: number;
   subEquipmentCategoryId?: number;
+  numEquipment?: number;
   /** If set, only these map nodes are queried (no auto-discovery). */
   mapIds?: number[];
 }): Promise<Record<string, number[]>> {
   const siteNights: Record<string, number[]> = {};
+  const numEquipment = options.numEquipment ?? 1;
 
   const visit = async (mapId: number, depth: number, seen: Set<number>) => {
     if (seen.has(mapId) || depth > 6) return;
@@ -118,6 +121,7 @@ export async function fetchParkDailyAvailability(options: {
         partySize: options.partySize,
         equipmentCategoryId: options.equipmentCategoryId,
         subEquipmentCategoryId: options.subEquipmentCategoryId,
+        numEquipment,
         getDailyAvailability: true,
       }),
     );

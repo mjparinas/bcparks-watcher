@@ -6,11 +6,23 @@ import type { AvailabilityReport, WeekendResult } from "@/lib/bcparks/types";
 type PublicConfig = {
   homeBase?: string;
   maxDriveMinutesFromHome?: number;
-  year: number;
-  month: number;
+  startDate: string;
+  endDate: string;
+  endDateLabel?: string;
   nights: string[];
   pollIntervalMinutes: number;
   partySize: number;
+  party?: {
+    adults: number;
+    kidsAges: number[];
+    tents: number;
+    cars: number;
+  };
+  equipment?: {
+    tents: number;
+    cars: number;
+    label: string;
+  };
   parks: Array<{
     name: string;
     shortName: string;
@@ -18,12 +30,20 @@ type PublicConfig = {
   }>;
 };
 
-function monthLabel(year: number, month: number): string {
-  return new Date(Date.UTC(year, month - 1, 1)).toLocaleDateString("en-CA", {
-    month: "long",
-    year: "numeric",
-    timeZone: "UTC",
-  });
+function formatRangeLabel(startDate: string, endDate: string): string {
+  const start = new Date(`${startDate}T12:00:00Z`);
+  const endExclusive = new Date(`${endDate}T12:00:00Z`);
+  const endInclusive = new Date(endExclusive);
+  endInclusive.setUTCDate(endInclusive.getUTCDate() - 1);
+
+  const fmt = (date: Date) =>
+    date.toLocaleDateString("en-CA", {
+      month: "short",
+      day: "numeric",
+      timeZone: "UTC",
+    });
+
+  return `${fmt(start)} → ${fmt(endInclusive)}`;
 }
 
 function formatCheckedAt(iso: string): string {
@@ -151,7 +171,7 @@ export function Dashboard() {
         <p className="brand">BC Parks Watcher</p>
         <h1>
           {config
-            ? `${monthLabel(config.year, config.month)} weekends`
+            ? `Fri–Mon · ${formatRangeLabel(config.startDate, config.endDate)}`
             : "Weekend availability"}
         </h1>
         <p className="lede">
@@ -159,10 +179,8 @@ export function Dashboard() {
           {config?.maxDriveMinutesFromHome
             ? `${Math.round(config.maxDriveMinutesFromHome / 60)} hours`
             : "range"}{" "}
-          of {config?.homeBase || "home"} for{" "}
-          {config?.nights.map((night) => night.slice(0, 3)).join("–") ||
-            "Fri–Sun"}{" "}
-          nights. Edit{" "}
+          of {config?.homeBase || "home"} for Friday→Monday stays
+          {config?.endDateLabel ? ` until ${config.endDateLabel}` : ""}. Edit{" "}
           <code>src/config/watcher.config.ts</code> to change parks or times.
         </p>
 
@@ -195,7 +213,11 @@ export function Dashboard() {
           {report
             ? `Last check ${formatCheckedAt(report.checkedAt)} · every ${report.pollIntervalMinutes} min`
             : "Waiting for first check…"}
-          {config ? ` · party of ${config.partySize}` : null}
+          {config?.party
+            ? ` · ${config.party.adults} adults, kids ${config.party.kidsAges.join(" & ")}, ${config.party.tents} tent, ${config.party.cars} car`
+            : config
+              ? ` · party of ${config.partySize}`
+              : null}
         </p>
 
         {config?.parks?.length ? (

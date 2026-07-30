@@ -17,7 +17,8 @@ export type WeekendWindow = {
   departure: Date;
 };
 
-function toUtcDate(year: number, month: number, day: number): Date {
+function parseIsoDate(iso: string): Date {
+  const [year, month, day] = iso.split("-").map(Number);
   return new Date(Date.UTC(year, month - 1, day));
 }
 
@@ -38,40 +39,62 @@ export function dayName(date: Date): string {
   });
 }
 
-/**
- * Build every weekend-sized night block in a month.
- * Example: nights=[fri,sat,sun] → each Fri–Sun in August.
- */
-export function getWeekendWindows(
-  year: number,
-  month: number,
-  nights: DayOfWeek[],
-): WeekendWindow[] {
-  if (nights.length === 0) return [];
-
-  const firstNightDow = DAY_INDEX[nights[0]];
+function nightOffsets(nights: DayOfWeek[]): number[] {
   const offsets: number[] = [0];
-
   for (let i = 1; i < nights.length; i++) {
     let delta = DAY_INDEX[nights[i]] - DAY_INDEX[nights[i - 1]];
     if (delta <= 0) delta += 7;
     offsets.push(offsets[i - 1] + delta);
   }
+  return offsets;
+}
 
-  const daysInMonth = new Date(Date.UTC(year, month, 0)).getUTCDate();
+/**
+ * Build every stay window in [startDate, endDate).
+ * Arrival must be >= startDate; departure must be < endDate.
+ * Example: nights=[fri,sat,sun] → Fri→Mon trips (leave Monday morning).
+ */
+export function getWeekendWindowsInRange(
+  startDate: string,
+  endDate: string,
+  nights: DayOfWeek[],
+): WeekendWindow[] {
+  if (nights.length === 0) return [];
+
+  const rangeStart = parseIsoDate(startDate);
+  const rangeEnd = parseIsoDate(endDate);
+  const firstNightDow = DAY_INDEX[nights[0]];
+  const offsets = nightOffsets(nights);
   const windows: WeekendWindow[] = [];
 
-  for (let day = 1; day <= daysInMonth; day++) {
-    const start = toUtcDate(year, month, day);
-    if (start.getUTCDay() !== firstNightDow) continue;
+  for (
+    let cursor = new Date(rangeStart);
+    cursor < rangeEnd;
+    cursor = addDays(cursor, 1)
+  ) {
+    if (cursor.getUTCDay() !== firstNightDow) continue;
 
-    const nightDates = offsets.map((offset) => addDays(start, offset));
-    windows.push({
-      nights: nightDates,
-      arrival: nightDates[0],
-      departure: addDays(nightDates[nightDates.length - 1], 1),
-    });
+    const nightDates = offsets.map((offset) => addDays(cursor, offset));
+    const arrival = nightDates[0];
+    const departure = addDays(nightDates[nightDates.length - 1], 1);
+
+    if (arrival < rangeStart) continue;
+    // endDate is exclusive: must be home before school starts
+    if (departure >= rangeEnd) continue;
+
+    windows.push({ nights: nightDates, arrival, departure });
   }
 
   return windows;
+}
+
+/** @deprecated Prefer getWeekendWindowsInRange */
+export function getWeekendWindows(
+  year: number,
+  month: number,
+  nights: DayOfWeek[],
+): WeekendWindow[] {
+  const startDate = formatDate(new Date(Date.UTC(year, month - 1, 1)));
+  const endDate = formatDate(new Date(Date.UTC(year, month, 1)));
+  return getWeekendWindowsInRange(startDate, endDate, nights);
 }

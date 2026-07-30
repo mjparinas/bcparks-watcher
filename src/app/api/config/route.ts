@@ -17,11 +17,19 @@ export async function GET() {
     maxDriveMinutesFromHome: watcherConfig.maxDriveMinutesFromHome,
     excludeFerry: watcherConfig.excludeFerry,
     excludeTollRoads: watcherConfig.excludeTollRoads,
-    year: watcherConfig.year,
-    month: watcherConfig.month,
+    startDate: watcherConfig.startDate,
+    endDate: watcherConfig.endDate,
+    endDateLabel: watcherConfig.endDateLabel,
     nights: watcherConfig.nights,
     pollIntervalMinutes: watcherConfig.pollIntervalMinutes,
+    party: watcherConfig.party,
     partySize: watcherConfig.partySize,
+    equipment: {
+      tents: watcherConfig.party.tents,
+      cars: watcherConfig.party.cars,
+      subEquipmentCategoryId: watcherConfig.subEquipmentCategoryId,
+      label: "1 Tent",
+    },
     parks,
   });
 }

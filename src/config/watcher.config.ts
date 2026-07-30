@@ -5,17 +5,10 @@
  * Look up more parks with: npm run lookup -- "garibaldi"
  * Or open /api/parks?q=garibaldi while the app is running.
  *
- * Drive times are approximate off-peak minutes from Langley, BC.
- *
  * Access rules (enforced below):
  * - No BC Ferries / boat-only access from homeBase
  * - No toll roads or toll bridges on the drive
  * - Vehicle-accessible frontcountry only
- *
- * Intentionally excluded nearby parks:
- * - Sunshine Coast (Porpoise Bay, Saltery Bay, Inland Lake) — ferry
- * - Vancouver Island / Gulf Islands — ferry
- * - Marine / boat-access campgrounds
  */
 
 export type DayOfWeek =
@@ -54,6 +47,14 @@ export type ParkConfig = {
   mapIds?: number[];
 };
 
+export type PartyConfig = {
+  adults: number;
+  /** Kid ages — used for notes; partySize counts everyone */
+  kidsAges: number[];
+  tents: number;
+  cars: number;
+};
+
 export type WatcherConfig = {
   /** Where drive-time estimates are measured from */
   homeBase: string;
@@ -66,13 +67,21 @@ export type WatcherConfig = {
   excludeFerry: boolean;
   /** Drop any park marked requiresTollRoad */
   excludeTollRoads: boolean;
-  /** Calendar year to scan (e.g. 2026) */
-  year: number;
-  /** Calendar month 1–12 (8 = August) */
-  month: number;
   /**
-   * Nights that make up a "weekend" block.
-   * Default Fri/Sat/Sun = arrive Friday, stay three nights, leave Monday.
+   * Inclusive start of the search window (YYYY-MM-DD).
+   * Weekends must arrive on or after this date.
+   */
+  startDate: string;
+  /**
+   * Exclusive end of the search window (YYYY-MM-DD).
+   * Weekends must depart before this date (e.g. school start day).
+   */
+  endDate: string;
+  /** Human note for why endDate was chosen */
+  endDateLabel?: string;
+  /**
+   * Nights that make up a stay.
+   * Fri–Sun nights = arrive Friday, leave Monday.
    */
   nights: DayOfWeek[];
   /**
@@ -80,14 +89,22 @@ export type WatcherConfig = {
    * Be polite to camping.bcparks.ca — 5+ minutes is a good default.
    */
   pollIntervalMinutes: number;
+  /** Booking party details */
+  party: PartyConfig;
+  /**
+   * Total people sent to the BC Parks API (adults + kids).
+   * Kept explicit so it’s easy to override.
+   */
   partySize: number;
   /** -32768 = standard non-group equipment category */
   equipmentCategoryId: number;
   /**
-   * Optional equipment subtype (tent, RV, …).
-   * Leave undefined for any. See camping.bcparks.ca/api/equipment
+   * Equipment subtype from camping.bcparks.ca/api/equipment
+   * -32768 = 1 Tent
    */
-  subEquipmentCategoryId?: number;
+  subEquipmentCategoryId: number;
+  /** How many equipment units (tents) to request */
+  numEquipment: number;
   parks: ParkConfig[];
   /**
    * Optional webhook (Slack/Discord/etc.) fired when a full weekend opens up.
@@ -101,16 +118,31 @@ export const watcherConfig: WatcherConfig = {
   maxDriveMinutesFromHome: 180,
   excludeFerry: true,
   excludeTollRoads: true,
-  year: 2026,
-  month: 8,
+
+  // Today → day school starts (BC districts: Tue Sep 8, 2026)
+  startDate: "2026-07-29",
+  endDate: "2026-09-08",
+  endDateLabel: "BC school start (Tue Sep 8, 2026)",
+
+  // Arrive Friday, stay Fri/Sat/Sun nights, leave Monday
   nights: ["friday", "saturday", "sunday"],
+
   pollIntervalMinutes: 5,
-  partySize: 2,
+
+  party: {
+    adults: 2,
+    kidsAges: [4, 6],
+    tents: 1,
+    cars: 1,
+  },
+  partySize: 4,
   equipmentCategoryId: -32768,
+  subEquipmentCategoryId: -32768, // 1 Tent
+  numEquipment: 1,
+
   /**
    * Mainland drive-only frontcountry parks within ~3 hours of Langley.
-   * No ferry, no toll roads/bridges (Port Mann & Golden Ears are toll-free).
-   * Drive times are approximate off-peak one-way estimates.
+   * No ferry, no toll roads/bridges.
    */
   parks: [
     {

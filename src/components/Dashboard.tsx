@@ -8,7 +8,6 @@ import {
   isDayOfWeek,
   orderContiguousNights,
   shortDayLabel,
-  staySpanLabel,
 } from "@/lib/bcparks/weekends";
 import type {
   AvailabilityReport,
@@ -33,22 +32,6 @@ type PublicConfig = {
     driveMinutesFromHome?: number;
   }>;
 };
-
-function formatRangeLabel(startDate: string, endDate: string): string {
-  const start = new Date(`${startDate}T12:00:00Z`);
-  const endExclusive = new Date(`${endDate}T12:00:00Z`);
-  const endInclusive = new Date(endExclusive);
-  endInclusive.setUTCDate(endInclusive.getUTCDate() - 1);
-
-  const fmt = (date: Date) =>
-    date.toLocaleDateString("en-CA", {
-      month: "short",
-      day: "numeric",
-      timeZone: "UTC",
-    });
-
-  return `${fmt(start)} → ${fmt(endInclusive)}`;
-}
 
 function formatCheckedAt(iso: string): string {
   return new Date(iso).toLocaleString("en-CA", {
@@ -138,18 +121,8 @@ function nightsFromConfig(config: PublicConfig): DayOfWeek[] {
   return DEFAULT_NIGHTS;
 }
 
-function formatPartyLabel(party: PartySettings): string {
-  const people = `${party.partySize} ${party.partySize === 1 ? "person" : "people"}`;
-  const tentLabel = `${party.tents} tent${party.tents === 1 ? "" : "s"}`;
-  return `${people}, ${tentLabel}`;
-}
-
 function nightsKey(nights: DayOfWeek[]): string {
   return nights.join(",");
-}
-
-function nightSelectionLabel(nights: DayOfWeek[]): string {
-  return orderContiguousNights(nights).map(shortDayLabel).join("+");
 }
 
 function resultMatchesFilters(
@@ -302,14 +275,6 @@ export function Dashboard() {
   const nightsContiguous = useMemo(
     () => areNightsContiguous(nights),
     [nights],
-  );
-  const orderedNights = useMemo(
-    () => (nightsContiguous ? orderContiguousNights(nights) : nights),
-    [nights, nightsContiguous],
-  );
-  const stayLabel = useMemo(
-    () => (nightsContiguous ? staySpanLabel(nights) : "Pick nights"),
-    [nights, nightsContiguous],
   );
 
   useEffect(() => {
@@ -712,153 +677,172 @@ export function Dashboard() {
   const fullHits = weekends.filter((w) => w.hasFullWeekend);
   const progressLabel =
     isChecking && progress.total > 0
-      ? `Checking ${progress.index}/${progress.total}`
+      ? `${progress.index}/${progress.total}`
       : null;
-
   const selectedCount = selectedParks.size;
   const totalParks = config?.parks.length ?? 0;
-  const parkWatchLabel =
-    totalParks === 0
-      ? "…"
-      : selectedCount === totalParks
-        ? `${selectedCount}`
-        : `${selectedCount} of ${totalParks}`;
-  const peopleLabel =
-    party.partySize === 1 ? "1 person" : `${party.partySize} people`;
-  const tentLabel =
-    party.tents === 1 ? "1 tent" : `${party.tents} tents`;
-  const nightsShort = nightsContiguous
-    ? nightSelectionLabel(orderedNights)
-    : "non-contiguous nights";
+  const statusLine = isChecking
+    ? progressLabel
+      ? `Searching ${progressLabel}`
+      : "Searching…"
+    : meta
+      ? `Updated ${formatCheckedAt(meta.checkedAt)}`
+      : "Ready";
+  const emptyMessage = !nightsContiguous
+    ? "Choose consecutive nights to search."
+    : selectedParks.size === 0
+      ? "Select at least one park."
+      : isChecking
+        ? "Looking for openings…"
+        : "No openings for these filters.";
 
   return (
     <div className="page-shell">
       <header className="hero">
-        <p className="brand">BC Parks Watcher</p>
-        <h1>
-          {config
-            ? `${stayLabel} · ${formatRangeLabel(dates.startDate, dates.endDate)}`
-            : "Weekend availability"}
-        </h1>
-        <p className="lede">
-          Watching {parkWatchLabel} parks
-          {config?.maxDriveMinutesFromHome
-            ? ` within ${Math.round(config.maxDriveMinutesFromHome / 60)} hours`
-            : ""}{" "}
-          of {config?.homeBase || "home"} for {stayLabel.replace("–", "→")} stays{" "}
-          {formatRangeLabel(dates.startDate, dates.endDate)} · {peopleLabel},{" "}
-          {tentLabel}. Showing same-site {nightsShort} availability only.
-        </p>
+        <div className="hero-top">
+          <p className="brand">BC Parks Watcher</p>
+          <div className="actions">
+            {isChecking ? (
+              <button
+                type="button"
+                className="btn stop"
+                aria-label="Stop search"
+                title="Stop search"
+                onClick={() => abortRef.current?.abort()}
+              >
+                <span className="stop-icon" aria-hidden="true" />
+                Stop
+              </button>
+            ) : (
+              <button
+                type="button"
+                className="btn primary"
+                onClick={() => void load()}
+                disabled={!nightsContiguous || selectedParks.size === 0}
+              >
+                Search
+              </button>
+            )}
+          </div>
+        </div>
 
-        <div className="actions">
-          {isChecking ? (
-            <button
-              type="button"
-              className="btn stop"
-              aria-label="Stop search"
-              title="Stop search"
-              onClick={() => abortRef.current?.abort()}
-            >
-              <span className="stop-icon" aria-hidden="true" />
-              {progressLabel || "Stop"}
-            </button>
-          ) : (
-            <button
-              type="button"
-              className="btn primary"
-              onClick={() => void load()}
-              disabled={!nightsContiguous || selectedParks.size === 0}
-            >
-              Check now
-            </button>
-          )}
+        <p className="status-line">
+          <span>{statusLine}</span>
+          <span className="status-sep" aria-hidden="true">
+            ·
+          </span>
           <button
             type="button"
-            className={`btn ${autoRefresh ? "active" : ""}`}
+            className={`text-toggle ${autoRefresh ? "on" : ""}`}
             onClick={() => setAutoRefresh((value) => !value)}
           >
-            Auto-refresh {autoRefresh ? "on" : "off"}
+            Auto {autoRefresh ? "on" : "off"}
           </button>
-          <button
-            type="button"
-            className={`btn ${notifyPermission === "granted" ? "active" : ""}`}
-            onClick={() => void requestNotifications()}
-            disabled={
-              notifyPermission === "granted" ||
-              notifyPermission === "unsupported"
-            }
-          >
-            {notifyPermission === "granted"
-              ? "Alerts on"
-              : notifyPermission === "denied"
-                ? "Alerts blocked"
-                : notifyPermission === "unsupported"
-                  ? "Alerts unavailable"
-                  : "Enable alerts"}
-          </button>
-        </div>
-
-        <p className="meta">
-          {isChecking
-            ? `${progressLabel} · bookable stays appear as they’re found`
-            : meta
-              ? `Last check ${formatCheckedAt(meta.checkedAt)} · every ${meta.pollIntervalMinutes} min`
-              : "Waiting for first check…"}
-          {` · ${formatPartyLabel(party)}`}
+          {notifyPermission !== "granted" &&
+          notifyPermission !== "unsupported" ? (
+            <>
+              <span className="status-sep" aria-hidden="true">
+                ·
+              </span>
+              <button
+                type="button"
+                className="text-toggle"
+                onClick={() => void requestNotifications()}
+                disabled={notifyPermission === "denied"}
+              >
+                {notifyPermission === "denied" ? "Alerts blocked" : "Enable alerts"}
+              </button>
+            </>
+          ) : null}
         </p>
 
-        <div className="party-controls" role="group" aria-label="Search settings">
-          <DateField
-            label="From"
-            value={dates.startDate}
-            max={dates.endDate}
-            onChange={(value) => updateDates("startDate", value)}
-          />
-          <DateField
-            label="Until"
-            hint="school start"
-            value={dates.endDate}
-            min={dates.startDate}
-            onChange={(value) => updateDates("endDate", value)}
-          />
-          <Stepper
-            label="People"
-            value={party.partySize}
-            min={1}
-            max={16}
-            onChange={(value) => updateParty("partySize", value)}
-          />
-          <Stepper
-            label="Tents"
-            value={party.tents}
-            min={1}
-            max={3}
-            onChange={(value) => updateParty("tents", value)}
-          />
-        </div>
+        <div className="filters">
+          <div className="filter-block">
+            <span className="filter-label">Nights</span>
+            <div className="day-chips" role="group" aria-label="Nights to stay">
+              {DAYS_OF_WEEK.map((day) => {
+                const selected = nights.includes(day);
+                return (
+                  <button
+                    key={day}
+                    type="button"
+                    className={`day-chip ${selected ? "selected" : ""}`}
+                    aria-pressed={selected}
+                    onClick={() => toggleNight(day)}
+                  >
+                    {shortDayLabel(day)}
+                  </button>
+                );
+              })}
+            </div>
+            {!nightsContiguous ? (
+              <p className="day-hint">Nights must be consecutive.</p>
+            ) : null}
+          </div>
 
-        <div className="day-chips" role="group" aria-label="Nights to stay">
-          {DAYS_OF_WEEK.map((day) => {
-            const selected = nights.includes(day);
-            return (
-              <button
-                key={day}
-                type="button"
-                className={`day-chip ${selected ? "selected" : ""}`}
-                aria-pressed={selected}
-                onClick={() => toggleNight(day)}
-              >
-                {shortDayLabel(day)}
-              </button>
-            );
-          })}
+          <div className="filter-block">
+            <span className="filter-label">When & party</span>
+            <div
+              className="party-controls"
+              role="group"
+              aria-label="Dates and party"
+            >
+              <DateField
+                label="From"
+                value={dates.startDate}
+                max={dates.endDate}
+                onChange={(value) => updateDates("startDate", value)}
+              />
+              <DateField
+                label="Until"
+                value={dates.endDate}
+                min={dates.startDate}
+                onChange={(value) => updateDates("endDate", value)}
+              />
+              <Stepper
+                label="People"
+                value={party.partySize}
+                min={1}
+                max={16}
+                onChange={(value) => updateParty("partySize", value)}
+              />
+              <Stepper
+                label="Tents"
+                value={party.tents}
+                min={1}
+                max={3}
+                onChange={(value) => updateParty("tents", value)}
+              />
+            </div>
+          </div>
+
+          {config?.parks?.length ? (
+            <div className="filter-block">
+              <span className="filter-label">
+                Parks
+                {selectedCount > 0 && totalParks > 0
+                  ? ` · ${selectedCount}/${totalParks}`
+                  : ""}
+              </span>
+              <div className="park-chips" role="group" aria-label="Parks">
+                {config.parks.map((park) => {
+                  const selected = selectedParks.has(park.shortName);
+                  return (
+                    <button
+                      key={park.shortName}
+                      type="button"
+                      className={`park-chip ${selected ? "selected" : ""}`}
+                      aria-pressed={selected}
+                      onClick={() => togglePark(park.shortName)}
+                    >
+                      {park.shortName}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          ) : null}
         </div>
-        {!nightsContiguous ? (
-          <p className="day-hint">
-            Select contiguous nights (for example Fri+Sat, or Fri–Sun) before
-            searching.
-          </p>
-        ) : null}
 
         {isChecking && progress.total > 0 ? (
           <div
@@ -868,31 +852,12 @@ export function Dashboard() {
             <div
               className="progress-fill"
               style={{
-                width: `${Math.min(100, (progress.index / progress.total) * 100)}%`,
+                width: `${Math.min(
+                  100,
+                  (progress.index / progress.total) * 100,
+                )}%`,
               }}
             />
-          </div>
-        ) : null}
-
-        {config?.parks?.length ? (
-          <div className="park-chips" role="group" aria-label="Parks to show">
-            {config.parks.map((park) => {
-              const selected = selectedParks.has(park.shortName);
-              return (
-                <button
-                  key={park.shortName}
-                  type="button"
-                  className={`park-chip ${selected ? "selected" : ""}`}
-                  aria-pressed={selected}
-                  onClick={() => togglePark(park.shortName)}
-                >
-                  {park.shortName}
-                  {park.driveMinutesFromHome != null
-                    ? ` · ${park.driveMinutesFromHome}m`
-                    : ""}
-                </button>
-              );
-            })}
           </div>
         ) : null}
       </header>
@@ -900,32 +865,28 @@ export function Dashboard() {
       {error ? <div className="banner error">{error}</div> : null}
 
       <section className={`section ${fullHits.length > 0 ? "highlight" : ""}`}>
-        <h2>Bookable weekends</h2>
-        <p className="section-copy">
-          {fullHits.length > 0
-            ? `Same campsite online-reservable for ${nightsShort} — book quickly.`
-            : isChecking
-              ? `Still scanning… online-reservable ${nightsShort} openings will show here.`
-              : `No online-reservable ${nightsShort} openings across ${weekends.length || "checked"} park/weekend combos.`}
-        </p>
+        <h2>
+          Openings
+          {fullHits.length > 0 ? (
+            <span className="count">{fullHits.length}</span>
+          ) : null}
+        </h2>
         {fullHits.length > 0 ? (
           <div className="result-list">
             {fullHits.map((weekend) => (
-              <WeekendRow
-                key={resultKey(weekend)}
-                weekend={weekend}
-                featured
-              />
+              <WeekendRow key={resultKey(weekend)} weekend={weekend} />
             ))}
           </div>
-        ) : isChecking && fullHits.length === 0 ? (
+        ) : isChecking ? (
           <div className="skeleton" />
-        ) : null}
+        ) : (
+          <p className="empty">{emptyMessage}</p>
+        )}
       </section>
 
       {errors.length > 0 ? (
         <section className="section">
-          <h2>Check errors</h2>
+          <h2>Errors</h2>
           <ul className="error-list">
             {errors.map((item) => (
               <li key={item}>{item}</li>
@@ -939,14 +900,12 @@ export function Dashboard() {
 
 function DateField({
   label,
-  hint,
   value,
   min,
   max,
   onChange,
 }: {
   label: string;
-  hint?: string;
   value: string;
   min?: string;
   max?: string;
@@ -954,10 +913,7 @@ function DateField({
 }) {
   return (
     <label className="stepper date-field">
-      <span className="stepper-label">
-        {label}
-        {hint ? <em className="stepper-hint">{hint}</em> : null}
-      </span>
+      <span className="stepper-label">{label}</span>
       <input
         type="date"
         className="date-input"
@@ -1027,46 +983,22 @@ function bookingUrlForSite(base: string, resourceId: string): string {
   }
 }
 
-function WeekendRow({
-  weekend,
-  featured = false,
-}: {
-  weekend: WeekendResult;
-  featured?: boolean;
-}) {
+function WeekendRow({ weekend }: { weekend: WeekendResult }) {
   const sites = weekend.openSites ?? [];
 
   return (
-    <article className={`result ${featured ? "featured" : ""}`}>
+    <article className="result">
       <div className="result-main">
         <div className="result-title">
           <span className="park">{weekend.parkShortName}</span>
-          {weekend.driveMinutesFromHome != null ? (
-            <span className="drive">~{weekend.driveMinutesFromHome} min</span>
-          ) : null}
           <span className="stay">{formatStay(weekend)}</span>
-        </div>
-        <div className="nights">
-          {weekend.nights.map((night) => (
-            <span
-              key={night.date}
-              className={`night ${night.availableSites > 0 ? "open" : "closed"}`}
-            >
-              <em>{night.dayOfWeek.slice(0, 3)}</em>
-              <strong>
-                {night.availableSites > 0 ? night.availableSites : "—"}
-              </strong>
-            </span>
-          ))}
-          <span
-            className={`night sites ${weekend.hasFullWeekend ? "open" : "closed"}`}
-          >
-            <em>Sites</em>
-            <strong>
-              {weekend.hasFullWeekend
-                ? `${weekend.fullWeekendSites}${weekend.sitesCapped ? "+" : ""}`
-                : "—"}
-            </strong>
+          {weekend.driveMinutesFromHome != null ? (
+            <span className="drive">{weekend.driveMinutesFromHome} min</span>
+          ) : null}
+          <span className="site-count">
+            {weekend.fullWeekendSites}
+            {weekend.sitesCapped ? "+" : ""}{" "}
+            {weekend.fullWeekendSites === 1 ? "site" : "sites"}
           </span>
         </div>
         {sites.length > 0 ? (
@@ -1078,13 +1010,13 @@ function WeekendRow({
                 href={bookingUrlForSite(weekend.bookingUrl, site.resourceId)}
                 target="_blank"
                 rel="noreferrer"
-                title={`Resource ${site.resourceId} · map ${site.mapId}`}
+                title={`Resource ${site.resourceId}`}
               >
                 {formatSiteId(site.resourceId)}
               </a>
             ))}
             {weekend.sitesCapped ? (
-              <span className="site-id muted">more unverified</span>
+              <span className="site-id muted">more</span>
             ) : null}
           </div>
         ) : null}

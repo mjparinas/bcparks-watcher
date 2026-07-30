@@ -257,10 +257,6 @@ export function Dashboard() {
   };
 
   const fullHits = weekends.filter((w) => w.hasFullWeekend);
-  const partialHits = weekends.filter(
-    (w) => w.hasAnyAvailability && !w.hasFullWeekend,
-  );
-  const empty = weekends.filter((w) => !w.hasAnyAvailability);
   const progressLabel =
     isChecking && progress.total > 0
       ? `Checking ${progress.index}/${progress.total}`
@@ -281,7 +277,8 @@ export function Dashboard() {
             ? `${Math.round(config.maxDriveMinutesFromHome / 60)} hours`
             : "range"}{" "}
           of {config?.homeBase || "home"} for Friday→Sunday stays
-          {config?.endDateLabel ? ` until ${config.endDateLabel}` : ""}. Edit{" "}
+          {config?.endDateLabel ? ` until ${config.endDateLabel}` : ""}.
+          Showing full Fri+Sat availability only. Edit{" "}
           <code>src/config/watcher.config.ts</code> to change parks or times.
         </p>
 
@@ -312,7 +309,7 @@ export function Dashboard() {
 
         <p className="meta">
           {isChecking
-            ? `${progressLabel} · results appear as each park finishes`
+            ? `${progressLabel} · full openings appear as they’re found`
             : meta
               ? `Last check ${formatCheckedAt(meta.checkedAt)} · every ${meta.pollIntervalMinutes} min`
               : "Waiting for first check…"}
@@ -353,12 +350,16 @@ export function Dashboard() {
 
       {error ? <div className="banner error">{error}</div> : null}
 
-      {fullHits.length > 0 ? (
-        <section className="section highlight">
-          <h2>Open full weekends</h2>
-          <p className="section-copy">
-            Every selected night has at least one matching site — book quickly.
-          </p>
+      <section className={`section ${fullHits.length > 0 ? "highlight" : ""}`}>
+        <h2>Open full weekends</h2>
+        <p className="section-copy">
+          {fullHits.length > 0
+            ? "Both Friday and Saturday nights are open — book quickly."
+            : isChecking
+              ? "Still scanning… full openings will show up here as soon as they’re found."
+              : `No full Fri+Sat openings across ${weekends.length || "checked"} park/weekend combos.`}
+        </p>
+        {fullHits.length > 0 ? (
           <div className="result-list">
             {fullHits.map((weekend) => (
               <WeekendRow
@@ -367,50 +368,6 @@ export function Dashboard() {
                 featured
               />
             ))}
-          </div>
-        </section>
-      ) : null}
-
-      {partialHits.length > 0 ? (
-        <section className="section">
-          <h2>Partial nights</h2>
-          <p className="section-copy">
-            Some nights are open, but not the full{" "}
-            {config?.nights.map((night) => night.slice(0, 3)).join("–") ||
-              "weekend"}{" "}
-            stretch.
-          </p>
-          <div className="result-list">
-            {partialHits.map((weekend) => (
-              <WeekendRow key={resultKey(weekend)} weekend={weekend} />
-            ))}
-          </div>
-        </section>
-      ) : null}
-
-      <section className="section">
-        <h2>All scanned weekends</h2>
-        <p className="section-copy">
-          {weekends.length > 0
-            ? `${weekends.length}${
-                isChecking && progress.total > 0
-                  ? ` of ${progress.total}`
-                  : ""
-              } park/weekend combinations checked.`
-            : isChecking
-              ? "Streaming live availability from camping.bcparks.ca…"
-              : "No results yet."}
-        </p>
-        {weekends.length > 0 ? (
-          <div className="result-list muted">
-            {(fullHits.length + partialHits.length > 0 ? empty : weekends).map(
-              (weekend) => (
-                <WeekendRow
-                  key={`${resultKey(weekend)}-all`}
-                  weekend={weekend}
-                />
-              ),
-            )}
           </div>
         ) : isChecking ? (
           <div className="skeleton" />

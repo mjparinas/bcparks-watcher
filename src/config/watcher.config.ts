@@ -6,8 +6,16 @@
  * Or open /api/parks?q=garibaldi while the app is running.
  *
  * Drive times are approximate off-peak minutes from Langley, BC.
- * Tune `maxDriveMinutesFromHome` or flip `enabled` / `driveMinutesFromHome`
- * on individual parks to change the watch list.
+ *
+ * Access rules (enforced below):
+ * - No BC Ferries / boat-only access from homeBase
+ * - No toll roads or toll bridges on the drive
+ * - Vehicle-accessible frontcountry only
+ *
+ * Intentionally excluded nearby parks:
+ * - Sunshine Coast (Porpoise Bay, Saltery Bay, Inland Lake) — ferry
+ * - Vancouver Island / Gulf Islands — ferry
+ * - Marine / boat-access campgrounds
  */
 
 export type DayOfWeek =
@@ -35,6 +43,10 @@ export type ParkConfig = {
    * Used with maxDriveMinutesFromHome to filter the watch list.
    */
   driveMinutesFromHome?: number;
+  /** True if reaching the park from homeBase requires a ferry */
+  requiresFerry?: boolean;
+  /** True if the usual drive uses a toll road / toll bridge */
+  requiresTollRoad?: boolean;
   /**
    * Optional: only check specific campground map IDs (child maps).
    * Leave empty to check the whole park (recommended).
@@ -50,6 +62,10 @@ export type WatcherConfig = {
    * Set undefined / omit to include every enabled park regardless of drive time.
    */
   maxDriveMinutesFromHome?: number;
+  /** Drop any park marked requiresFerry */
+  excludeFerry: boolean;
+  /** Drop any park marked requiresTollRoad */
+  excludeTollRoads: boolean;
   /** Calendar year to scan (e.g. 2026) */
   year: number;
   /** Calendar month 1–12 (8 = August) */
@@ -83,6 +99,8 @@ export type WatcherConfig = {
 export const watcherConfig: WatcherConfig = {
   homeBase: "Langley, BC",
   maxDriveMinutesFromHome: 180,
+  excludeFerry: true,
+  excludeTollRoads: true,
   year: 2026,
   month: 8,
   nights: ["friday", "saturday", "sunday"],
@@ -90,8 +108,8 @@ export const watcherConfig: WatcherConfig = {
   partySize: 2,
   equipmentCategoryId: -32768,
   /**
-   * Vehicle-accessible frontcountry parks within ~3 hours of Langley.
-   * Excludes ferry-only Sunshine Coast / Island parks and day-use-only areas.
+   * Mainland drive-only frontcountry parks within ~3 hours of Langley.
+   * No ferry, no toll roads/bridges (Port Mann & Golden Ears are toll-free).
    * Drive times are approximate off-peak one-way estimates.
    */
   parks: [
@@ -101,6 +119,8 @@ export const watcherConfig: WatcherConfig = {
       resourceLocationId: -2147483543,
       rootMapId: -2147483430,
       driveMinutesFromHome: 55,
+      requiresFerry: false,
+      requiresTollRoad: false,
       enabled: true,
     },
     {
@@ -109,6 +129,8 @@ export const watcherConfig: WatcherConfig = {
       resourceLocationId: -2147483606,
       rootMapId: -2147483576,
       driveMinutesFromHome: 60,
+      requiresFerry: false,
+      requiresTollRoad: false,
       enabled: true,
     },
     {
@@ -117,6 +139,8 @@ export const watcherConfig: WatcherConfig = {
       resourceLocationId: -2147483623,
       rootMapId: -2147483610,
       driveMinutesFromHome: 60,
+      requiresFerry: false,
+      requiresTollRoad: false,
       enabled: true,
     },
     {
@@ -125,6 +149,8 @@ export const watcherConfig: WatcherConfig = {
       resourceLocationId: -2147483550,
       rootMapId: -2147483449,
       driveMinutesFromHome: 90,
+      requiresFerry: false,
+      requiresTollRoad: false,
       enabled: true,
     },
     {
@@ -133,6 +159,8 @@ export const watcherConfig: WatcherConfig = {
       resourceLocationId: -2147483539,
       rootMapId: -2147483420,
       driveMinutesFromHome: 95,
+      requiresFerry: false,
+      requiresTollRoad: false,
       enabled: true,
     },
     {
@@ -141,6 +169,8 @@ export const watcherConfig: WatcherConfig = {
       resourceLocationId: -2147483647,
       rootMapId: -2147483648,
       driveMinutesFromHome: 110,
+      requiresFerry: false,
+      requiresTollRoad: false,
       enabled: true,
     },
     {
@@ -149,6 +179,8 @@ export const watcherConfig: WatcherConfig = {
       resourceLocationId: -2147483535,
       rootMapId: -2147483410,
       driveMinutesFromHome: 120,
+      requiresFerry: false,
+      requiresTollRoad: false,
       enabled: true,
     },
     {
@@ -157,6 +189,8 @@ export const watcherConfig: WatcherConfig = {
       resourceLocationId: -2147483627,
       rootMapId: -2147483619,
       driveMinutesFromHome: 130,
+      requiresFerry: false,
+      requiresTollRoad: false,
       enabled: true,
     },
     {
@@ -165,6 +199,8 @@ export const watcherConfig: WatcherConfig = {
       resourceLocationId: -2147483618,
       rootMapId: -2147483601,
       driveMinutesFromHome: 150,
+      requiresFerry: false,
+      requiresTollRoad: false,
       enabled: true,
     },
     {
@@ -173,6 +209,8 @@ export const watcherConfig: WatcherConfig = {
       resourceLocationId: -2147483534,
       rootMapId: -2147483368,
       driveMinutesFromHome: 160,
+      requiresFerry: false,
+      requiresTollRoad: false,
       enabled: true,
     },
     {
@@ -181,7 +219,31 @@ export const watcherConfig: WatcherConfig = {
       resourceLocationId: -2147483564,
       rootMapId: -2147483471,
       driveMinutesFromHome: 170,
+      requiresFerry: false,
+      requiresTollRoad: false,
       enabled: true,
     },
   ],
 };
+
+/** Parks that pass enabled / drive-time / ferry / toll filters. */
+export function getActiveParks(
+  config: WatcherConfig = watcherConfig,
+): ParkConfig[] {
+  const maxDrive = config.maxDriveMinutesFromHome;
+
+  return config.parks
+    .filter((park) => park.enabled)
+    .filter((park) => !(config.excludeFerry && park.requiresFerry))
+    .filter((park) => !(config.excludeTollRoads && park.requiresTollRoad))
+    .filter((park) => {
+      if (maxDrive == null) return true;
+      if (park.driveMinutesFromHome == null) return true;
+      return park.driveMinutesFromHome <= maxDrive;
+    })
+    .sort(
+      (a, b) =>
+        (a.driveMinutesFromHome ?? Number.MAX_SAFE_INTEGER) -
+        (b.driveMinutesFromHome ?? Number.MAX_SAFE_INTEGER),
+    );
+}

@@ -2,13 +2,15 @@
 
 Next.js app that periodically checks [camping.bcparks.ca](https://camping.bcparks.ca) for weekend campsite availability.
 
-Default watch list (≤ ~3 hours from **Langley, BC**):
+Default watch list (≤ ~3 hours from **Langley, BC**, no ferry / no toll roads):
 
 - Rolley Lake, Golden Ears, Cultus Lake
 - Porteau Cove, Sasquatch, Alice Lake
 - Silver Lake, Chilliwack Lake, Manning, Skagit Valley, Nairn Falls
 
+Sunshine Coast and Island parks are excluded because they need BC Ferries.
 Drive times and the `maxDriveMinutesFromHome` cutoff live in config.
+`excludeFerry` / `excludeTollRoads` stay on so marked parks are skipped.
 
 ## Quick start
 

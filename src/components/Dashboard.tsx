@@ -13,6 +13,7 @@ import type {
   AvailabilityReport,
   CheckEvent,
   CheckMeta,
+  OpenSite,
   WeekendResult,
 } from "@/lib/bcparks/types";
 
@@ -874,7 +875,37 @@ export function Dashboard() {
         {fullHits.length > 0 ? (
           <div className="result-list">
             {fullHits.map((weekend) => (
-              <WeekendRow key={resultKey(weekend)} weekend={weekend} />
+              <WeekendRow
+                key={resultKey(weekend)}
+                weekend={weekend}
+                party={party}
+                onExpandSites={(key, expansion) => {
+                  setWeekends((current) =>
+                    sortWeekends(
+                      current.map((item) => {
+                        if (resultKey(item) !== key) return item;
+                        const seen = new Set(
+                          item.openSites.map((site) => site.resourceId),
+                        );
+                        const added = expansion.openSites.filter(
+                          (site) => !seen.has(site.resourceId),
+                        );
+                        const openSites = [...item.openSites, ...added];
+                        return {
+                          ...item,
+                          openSites,
+                          fullWeekendSites: openSites.length,
+                          sitesCapped: expansion.sitesCapped,
+                          nights: item.nights.map((night) => ({
+                            ...night,
+                            availableSites: openSites.length,
+                          })),
+                        };
+                      }),
+                    ),
+                  );
+                }}
+              />
             ))}
           </div>
         ) : isChecking ? (
@@ -987,8 +1018,65 @@ function bookingUrlForSite(base: string, resourceId: string): string {
   }
 }
 
-function WeekendRow({ weekend }: { weekend: WeekendResult }) {
+function WeekendRow({
+  weekend,
+  party,
+  onExpandSites,
+}: {
+  weekend: WeekendResult;
+  party: PartySettings;
+  onExpandSites: (
+    key: string,
+    expansion: { openSites: OpenSite[]; sitesCapped: boolean },
+  ) => void;
+}) {
   const sites = weekend.openSites ?? [];
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [moreError, setMoreError] = useState<string | null>(null);
+
+  const loadMore = async () => {
+    if (loadingMore || !weekend.sitesCapped) return;
+    const lastNight = weekend.nights[weekend.nights.length - 1]?.date;
+    if (!lastNight) {
+      setMoreError("Missing night dates");
+      return;
+    }
+
+    setLoadingMore(true);
+    setMoreError(null);
+
+    const params = new URLSearchParams({
+      park: weekend.parkShortName,
+      arrivalDate: weekend.arrivalDate,
+      lastNightDate: lastNight,
+      nightCount: String(weekend.nights.length),
+      partySize: String(party.partySize),
+      tents: String(party.tents),
+      exclude: sites.map((site) => site.resourceId).join(","),
+    });
+
+    try {
+      const response = await fetch(`/api/availability/more?${params}`, {
+        cache: "no-store",
+      });
+      const data = (await response.json()) as {
+        openSites?: OpenSite[];
+        sitesCapped?: boolean;
+        error?: string;
+      };
+      if (!response.ok) {
+        throw new Error(data.error ?? `Request failed (${response.status})`);
+      }
+      onExpandSites(resultKey(weekend), {
+        openSites: data.openSites ?? [],
+        sitesCapped: Boolean(data.sitesCapped),
+      });
+    } catch (err) {
+      setMoreError(err instanceof Error ? err.message : "Failed to load more");
+    } finally {
+      setLoadingMore(false);
+    }
+  };
 
   return (
     <article className="result">
@@ -1014,16 +1102,30 @@ function WeekendRow({ weekend }: { weekend: WeekendResult }) {
                 href={bookingUrlForSite(weekend.bookingUrl, site.resourceId)}
                 target="_blank"
                 rel="noreferrer"
-                title={site.name ? `${site.name}` : `Site ${formatSiteId(site.resourceId)}`}
+                title={
+                  site.name
+                    ? `${site.name}`
+                    : `Site ${formatSiteId(site.resourceId)}`
+                }
               >
                 {siteLabel(site)}
               </a>
             ))}
             {weekend.sitesCapped ? (
-              <span className="site-id muted">more</span>
+              <button
+                type="button"
+                className="site-id muted more-sites"
+                onClick={() => void loadMore()}
+                disabled={loadingMore}
+                aria-busy={loadingMore}
+                title="Find remaining open campsites"
+              >
+                {loadingMore ? "…" : "more"}
+              </button>
             ) : null}
           </div>
         ) : null}
+        {moreError ? <p className="more-error">{moreError}</p> : null}
       </div>
       <a
         className="book"

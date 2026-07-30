@@ -97,6 +97,86 @@ function buildMeta(
   };
 }
 
+async function collectDailyCandidates(options: {
+  park: ParkConfig;
+  config: WatcherConfig;
+  startDate: string;
+  endDateApi: string;
+  nightCount: number;
+}): Promise<OpenSite[]> {
+  const daily = await fetchParkAvailability({
+    rootMapId: options.park.rootMapId,
+    resourceLocationId: options.park.resourceLocationId,
+    startDate: options.startDate,
+    endDate: options.endDateApi,
+    partySize: options.config.partySize,
+    equipmentCategoryId: options.config.equipmentCategoryId,
+    subEquipmentCategoryId: options.config.subEquipmentCategoryId,
+    numEquipment: options.config.numEquipment,
+    mapIds: options.park.mapIds,
+    getDailyAvailability: true,
+  });
+
+  const candidates: OpenSite[] = [];
+
+  for (const [resourceId, site] of Object.entries(daily)) {
+    if (site.nights.length < options.nightCount) continue;
+    const everyNightOpen = site.nights
+      .slice(0, options.nightCount)
+      .every((code) => code === AVAILABILITY_OPEN);
+    if (!everyNightOpen) continue;
+    candidates.push({ resourceId, mapId: site.mapId });
+  }
+
+  return candidates;
+}
+
+async function verifyOnlineReservableSites(options: {
+  candidates: OpenSite[];
+  startDate: string;
+  endDateApi: string;
+  nightCount: number;
+}): Promise<OpenSite[]> {
+  const verified: OpenSite[] = [];
+
+  for (let i = 0; i < options.candidates.length; i += MAX_VERIFY_SITES) {
+    const batch = options.candidates.slice(i, i + MAX_VERIFY_SITES);
+    const batchVerified = (
+      await Promise.all(
+        batch.map(async (site) =>
+          (await isOnlineReservableStay({
+            resourceId: site.resourceId,
+            startDate: options.startDate,
+            endDate: options.endDateApi,
+            nightCount: options.nightCount,
+          }))
+            ? site
+            : null,
+        ),
+      )
+    ).filter((site): site is OpenSite => site != null);
+    verified.push(...batchVerified);
+  }
+
+  return verified;
+}
+
+async function attachSiteNames(
+  park: ParkConfig,
+  sites: OpenSite[],
+): Promise<OpenSite[]> {
+  if (sites.length === 0) return sites;
+  try {
+    const names = await fetchResourceNames(park.resourceLocationId);
+    return sites.map((site) => ({
+      ...site,
+      name: names[site.resourceId] ?? site.name,
+    }));
+  } catch {
+    return sites;
+  }
+}
+
 /**
  * Same campsite online-reservable for every night in the stay.
  * Uses daily map availability only (no continuous pass), skips booked
@@ -112,61 +192,24 @@ async function checkParkWindow(
   const departureDate = formatDate(window.departure);
   const nightCount = window.nights.length;
 
-  const daily = await fetchParkAvailability({
-    rootMapId: park.rootMapId,
-    resourceLocationId: park.resourceLocationId,
+  const candidates = await collectDailyCandidates({
+    park,
+    config,
     startDate,
-    endDate: endDateApi,
-    partySize: config.partySize,
-    equipmentCategoryId: config.equipmentCategoryId,
-    subEquipmentCategoryId: config.subEquipmentCategoryId,
-    numEquipment: config.numEquipment,
-    mapIds: park.mapIds,
-    getDailyAvailability: true,
+    endDateApi,
+    nightCount,
   });
-
-  const candidates: OpenSite[] = [];
-
-  for (const [resourceId, site] of Object.entries(daily)) {
-    if (site.nights.length < nightCount) continue;
-    const everyNightOpen = site.nights
-      .slice(0, nightCount)
-      .every((code) => code === AVAILABILITY_OPEN);
-    if (!everyNightOpen) continue;
-    candidates.push({ resourceId, mapId: site.mapId });
-  }
 
   const toVerify = candidates.slice(0, MAX_VERIFY_SITES);
   const sitesCapped = candidates.length > MAX_VERIFY_SITES;
 
-  const verified = (
-    await Promise.all(
-      toVerify.map(async (site) =>
-        (await isOnlineReservableStay({
-          resourceId: site.resourceId,
-          startDate,
-          endDate: endDateApi,
-          nightCount,
-        }))
-          ? site
-          : null,
-      ),
-    )
-  ).filter((site): site is OpenSite => site != null);
-
-  let named = verified;
-  if (verified.length > 0) {
-    try {
-      const names = await fetchResourceNames(park.resourceLocationId);
-      named = verified.map((site) => ({
-        ...site,
-        name: names[site.resourceId] ?? site.name,
-      }));
-    } catch {
-      // Labels are nice-to-have; keep numeric IDs if the name lookup fails
-      named = verified;
-    }
-  }
+  const verified = await verifyOnlineReservableSites({
+    candidates: toVerify,
+    startDate,
+    endDateApi,
+    nightCount,
+  });
+  const named = await attachSiteNames(park, verified);
 
   const fullWeekendSites = named.length;
   const first = named[0];
@@ -201,6 +244,64 @@ async function checkParkWindow(
     }),
     hasAnyAvailability: fullWeekendSites > 0,
     hasFullWeekend: fullWeekendSites > 0,
+  };
+}
+
+export type MoreOpenSitesResult = {
+  parkShortName: string;
+  arrivalDate: string;
+  openSites: OpenSite[];
+  sitesCapped: boolean;
+};
+
+/**
+ * Verify remaining daily candidates for one park/stay, skipping sites already shown.
+ */
+export async function findRemainingOpenSites(options: {
+  shortName: string;
+  arrivalDate: string;
+  lastNightDate: string;
+  nightCount: number;
+  excludeResourceIds?: string[];
+  partyOverrides?: PartyOverrides;
+}): Promise<MoreOpenSitesResult> {
+  const config = resolveConfig({ partyOverrides: options.partyOverrides });
+  const park = getActiveParks(config, {
+    shortNames: [options.shortName],
+  })[0];
+
+  if (!park) {
+    throw new Error(`Unknown or inactive park: ${options.shortName}`);
+  }
+
+  if (options.nightCount < 1) {
+    throw new Error("nightCount must be at least 1");
+  }
+
+  const exclude = new Set(options.excludeResourceIds ?? []);
+  const candidates = (
+    await collectDailyCandidates({
+      park,
+      config,
+      startDate: options.arrivalDate,
+      endDateApi: options.lastNightDate,
+      nightCount: options.nightCount,
+    })
+  ).filter((site) => !exclude.has(site.resourceId));
+
+  const verified = await verifyOnlineReservableSites({
+    candidates,
+    startDate: options.arrivalDate,
+    endDateApi: options.lastNightDate,
+    nightCount: options.nightCount,
+  });
+  const named = await attachSiteNames(park, verified);
+
+  return {
+    parkShortName: park.shortName,
+    arrivalDate: options.arrivalDate,
+    openSites: named,
+    sitesCapped: false,
   };
 }
 

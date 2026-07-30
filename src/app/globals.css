@@ -448,6 +448,29 @@ a.site-id:hover {
   background: transparent;
 }
 
+button.site-id.more-sites {
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.72rem;
+  font-weight: 650;
+}
+
+button.site-id.more-sites:hover:not(:disabled) {
+  border-color: rgba(47, 107, 79, 0.45);
+  color: var(--moss-deep);
+}
+
+button.site-id.more-sites:disabled {
+  cursor: wait;
+  opacity: 0.7;
+}
+
+.more-error {
+  margin: 0.35rem 0 0;
+  color: #9b2c2c;
+  font-size: 0.75rem;
+}
+
 .book {
   flex-shrink: 0;
   text-decoration: none;

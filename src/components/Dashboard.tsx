@@ -102,6 +102,14 @@ export function Dashboard() {
   const [isChecking, setIsChecking] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [autoRefresh, setAutoRefresh] = useState(true);
+  const [notifyPermission, setNotifyPermission] = useState<
+    NotificationPermission | "unsupported"
+  >(() => {
+    if (typeof window === "undefined" || !("Notification" in window)) {
+      return "default";
+    }
+    return Notification.permission;
+  });
   const previousHits = useRef<Set<string>>(new Set());
   const abortRef = useRef<AbortController | null>(null);
 
@@ -231,6 +239,19 @@ export function Dashboard() {
         if (!cancelled) setConfig(null);
       });
 
+    // Request browser notification permission up front so openings can alert by default
+    if (typeof window !== "undefined" && "Notification" in window) {
+      if (Notification.permission === "default") {
+        void Notification.requestPermission().then((permission) => {
+          if (!cancelled) setNotifyPermission(permission);
+        });
+      }
+    } else {
+      queueMicrotask(() => {
+        if (!cancelled) setNotifyPermission("unsupported");
+      });
+    }
+
     const timer = window.setTimeout(() => {
       void load();
     }, 0);
@@ -253,7 +274,8 @@ export function Dashboard() {
 
   const requestNotifications = async () => {
     if (!("Notification" in window)) return;
-    await Notification.requestPermission();
+    const permission = await Notification.requestPermission();
+    setNotifyPermission(permission);
   };
 
   const fullHits = weekends.filter((w) => w.hasFullWeekend);
@@ -300,10 +322,20 @@ export function Dashboard() {
           </button>
           <button
             type="button"
-            className="btn"
+            className={`btn ${notifyPermission === "granted" ? "active" : ""}`}
             onClick={() => void requestNotifications()}
+            disabled={
+              notifyPermission === "granted" ||
+              notifyPermission === "unsupported"
+            }
           >
-            Enable alerts
+            {notifyPermission === "granted"
+              ? "Alerts on"
+              : notifyPermission === "denied"
+                ? "Alerts blocked"
+                : notifyPermission === "unsupported"
+                  ? "Alerts unavailable"
+                  : "Enable alerts"}
           </button>
         </div>
 

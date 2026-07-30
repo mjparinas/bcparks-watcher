@@ -73,7 +73,9 @@ function buildMeta(
 
 /**
  * A "full weekend" means the SAME campsite is reservable for every night
- * in the stay (continuous booking), not different sites on different nights.
+ * in the stay — not different sites on different nights, and not sites that
+ * only look open as a continuous stay while individual nights (or checkout
+ * rules) block the Friday→Sunday trip.
  */
 async function checkParkWindow(
   config: WatcherConfig,
@@ -84,8 +86,7 @@ async function checkParkWindow(
   const endDateApi = formatDate(window.nights[window.nights.length - 1]);
   const departureDate = formatDate(window.departure);
 
-  // Continuous stay = same site bookable for the whole Fri→Sun window
-  const continuous = await fetchParkAvailability({
+  const shared = {
     rootMapId: park.rootMapId,
     resourceLocationId: park.resourceLocationId,
     startDate,
@@ -95,14 +96,32 @@ async function checkParkWindow(
     subEquipmentCategoryId: config.subEquipmentCategoryId,
     numEquipment: config.numEquipment,
     mapIds: park.mapIds,
-    getDailyAvailability: false,
-  });
+  };
 
+  const [continuous, daily] = await Promise.all([
+    fetchParkAvailability({ ...shared, getDailyAvailability: false }),
+    fetchParkAvailability({ ...shared, getDailyAvailability: true }),
+  ]);
+
+  const nightCount = window.nights.length;
   let fullWeekendSites = 0;
-  for (const stayCodes of Object.values(continuous)) {
-    if (stayCodes.some((code) => code === AVAILABILITY_OPEN)) {
-      fullWeekendSites += 1;
-    }
+
+  for (const [resourceId, stayCodes] of Object.entries(continuous)) {
+    // Must be bookable as one continuous reservation on this site
+    if (!stayCodes.some((code) => code === AVAILABILITY_OPEN)) continue;
+
+    const nightCodes = daily[resourceId];
+    if (!nightCodes || nightCodes.length < nightCount) continue;
+
+    // Every night in the stay must be open on THIS same site.
+    // Filters out departure/checkout-restricted sites that the continuous
+    // endpoint sometimes marks available even when a night is blocked.
+    const everyNightOpen = nightCodes
+      .slice(0, nightCount)
+      .every((code) => code === AVAILABILITY_OPEN);
+    if (!everyNightOpen) continue;
+
+    fullWeekendSites += 1;
   }
 
   const nights: NightAvailability[] = window.nights.map((date) => ({

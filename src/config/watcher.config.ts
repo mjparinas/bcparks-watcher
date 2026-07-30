@@ -124,8 +124,8 @@ export const watcherConfig: WatcherConfig = {
   endDate: "2026-09-08",
   endDateLabel: "BC school start (Tue Sep 8, 2026)",
 
-  // Arrive Friday, stay Fri/Sat/Sun nights, leave Monday
-  nights: ["friday", "saturday", "sunday"],
+  // Arrive Friday, stay Fri/Sat nights, leave Sunday
+  nights: ["friday", "saturday"],
 
   pollIntervalMinutes: 5,
 

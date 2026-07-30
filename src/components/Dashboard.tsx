@@ -171,7 +171,7 @@ export function Dashboard() {
         <p className="brand">BC Parks Watcher</p>
         <h1>
           {config
-            ? `Fri–Mon · ${formatRangeLabel(config.startDate, config.endDate)}`
+            ? `Fri–Sun · ${formatRangeLabel(config.startDate, config.endDate)}`
             : "Weekend availability"}
         </h1>
         <p className="lede">
@@ -179,7 +179,7 @@ export function Dashboard() {
           {config?.maxDriveMinutesFromHome
             ? `${Math.round(config.maxDriveMinutesFromHome / 60)} hours`
             : "range"}{" "}
-          of {config?.homeBase || "home"} for Friday→Monday stays
+          of {config?.homeBase || "home"} for Friday→Sunday stays
           {config?.endDateLabel ? ` until ${config.endDateLabel}` : ""}. Edit{" "}
           <code>src/config/watcher.config.ts</code> to change parks or times.
         </p>

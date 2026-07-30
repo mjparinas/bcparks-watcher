@@ -8,7 +8,7 @@ Default watch list (≤ ~3 hours from **Langley, BC**, no ferry / no toll roads)
 - Porteau Cove, Sasquatch, Alice Lake
 - Silver Lake, Chilliwack Lake, Manning, Skagit Valley, Nairn Falls
 
-Search window: **today → BC school start** (Tue Sep 8, 2026), **Friday→Monday** stays only.
+Search window: **today → BC school start** (Tue Sep 8, 2026), **Friday→Sunday** stays only.
 
 Party defaults: **2 adults + kids (4 & 6)**, **1 tent**, **1 car**.
 
@@ -33,7 +33,7 @@ export const watcherConfig = {
   maxDriveMinutesFromHome: 180, // 3 hours
   startDate: "2026-07-29",
   endDate: "2026-09-08", // school start (exclusive)
-  nights: ["friday", "saturday", "sunday"], // Fri→Mon
+  nights: ["friday", "saturday"], // Fri→Sun
   partySize: 4,
   party: { adults: 2, kidsAges: [4, 6], tents: 1, cars: 1 },
   subEquipmentCategoryId: -32768, // 1 Tent
@@ -55,10 +55,10 @@ Copy the printed object into `parks`.
 
 ### Change the weekend definition
 
-`nights` is the overnight dates required. Fri→Mon stays use:
+`nights` is the overnight dates required. Fri→Sun stays use:
 
 ```ts
-nights: ["friday", "saturday", "sunday"] // leave Monday morning
+nights: ["friday", "saturday"] // leave Sunday morning
 ```
 
 Date range is `startDate` → `endDate` (exclusive). Stays must arrive on/after `startDate` and depart before `endDate`.

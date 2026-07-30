@@ -63,6 +63,14 @@ function resultKey(weekend: WeekendResult): string {
   return `${weekend.parkShortName}:${weekend.arrivalDate}:${weekend.departureDate}`;
 }
 
+const GONE_FLASH_MS = 12_000;
+
+type GoneOpening = {
+  key: string;
+  weekend: WeekendResult;
+  goneAt: number;
+};
+
 type SortBy = "date" | "distance";
 
 function isSortBy(value: unknown): value is SortBy {
@@ -280,8 +288,11 @@ export function Dashboard() {
   const [dates, setDates] = useState<DateSettings>(DEFAULT_DATES);
   const [nights, setNights] = useState<DayOfWeek[]>(DEFAULT_NIGHTS);
   const [sortBy, setSortBy] = useState<SortBy>("date");
+  const [recentlyGone, setRecentlyGone] = useState<GoneOpening[]>([]);
   const [settingsReady, setSettingsReady] = useState(false);
   const previousHits = useRef<Set<string>>(new Set());
+  const hitsBeforeSearch = useRef<Map<string, WeekendResult>>(new Map());
+  const weekendsRef = useRef<WeekendResult[]>([]);
   const abortRef = useRef<AbortController | null>(null);
   const selectedParksRef = useRef(selectedParks);
   const partyRef = useRef(party);
@@ -302,6 +313,22 @@ export function Dashboard() {
   }, [selectedParks]);
 
   useEffect(() => {
+    weekendsRef.current = weekends;
+  }, [weekends]);
+
+  useEffect(() => {
+    if (recentlyGone.length === 0) return;
+    const id = window.setInterval(() => {
+      const cutoff = Date.now() - GONE_FLASH_MS;
+      setRecentlyGone((current) => {
+        const next = current.filter((item) => item.goneAt > cutoff);
+        return next.length === current.length ? current : next;
+      });
+    }, 500);
+    return () => window.clearInterval(id);
+  }, [recentlyGone.length]);
+
+  useEffect(() => {
     partyRef.current = party;
   }, [party]);
 
@@ -316,6 +343,23 @@ export function Dashboard() {
   useEffect(() => {
     sortByRef.current = sortBy;
   }, [sortBy]);
+
+  const markGone = useCallback((weekend: WeekendResult) => {
+    const key = resultKey(weekend);
+    previousHits.current.delete(key);
+    hitsBeforeSearch.current.delete(key);
+    setRecentlyGone((current) => {
+      if (current.some((item) => item.key === key)) return current;
+      return [
+        ...current,
+        {
+          key,
+          weekend: { ...weekend, hasFullWeekend: false, hasAnyAvailability: false },
+          goneAt: Date.now(),
+        },
+      ];
+    });
+  }, []);
 
   const load = useCallback(async (parksOverride?: Set<string>) => {
     const parksToCheck = parksOverride ?? selectedParksRef.current;
@@ -335,24 +379,30 @@ export function Dashboard() {
     if (resultsPartyKey.current !== partyKey) {
       // Party/tents change availability — drop all sticky results.
       setWeekends([]);
+      setRecentlyGone([]);
       previousHits.current = new Set();
+      hitsBeforeSearch.current = new Map();
       resultsPartyKey.current = partyKey;
     } else {
-      setWeekends((current) => {
-        const next = pruneWeekendsToFilters(
-          current,
-          parksToCheck,
-          datesToUse,
-          nightsToUse,
-        );
-        const keepKeys = new Set(
-          next.filter((weekend) => weekend.hasFullWeekend).map(resultKey),
-        );
-        previousHits.current = new Set(
-          [...previousHits.current].filter((key) => keepKeys.has(key)),
-        );
-        return next;
-      });
+      const pruned = pruneWeekendsToFilters(
+        weekendsRef.current,
+        parksToCheck,
+        datesToUse,
+        nightsToUse,
+      );
+      hitsBeforeSearch.current = new Map(
+        pruned
+          .filter((weekend) => weekend.hasFullWeekend)
+          .map((weekend) => [resultKey(weekend), weekend]),
+      );
+      setRecentlyGone([]);
+      setWeekends(pruned);
+      const keepKeys = new Set(
+        pruned.filter((weekend) => weekend.hasFullWeekend).map(resultKey),
+      );
+      previousHits.current = new Set(
+        [...previousHits.current].filter((key) => keepKeys.has(key)),
+      );
     }
 
     if (!areNightsContiguous(nightsToUse)) {
@@ -365,7 +415,9 @@ export function Dashboard() {
 
     if (parksToCheck.size === 0) {
       setWeekends([]);
+      setRecentlyGone([]);
       previousHits.current = new Set();
+      hitsBeforeSearch.current = new Map();
       setIsChecking(false);
       return;
     }
@@ -425,24 +477,40 @@ export function Dashboard() {
             setProgress({ index: 0, total: event.meta.totalChecks });
           } else if (event.type === "result") {
             setProgress({ index: event.index, total: event.total });
-            setWeekends((current) =>
-              sortWeekends(
-                [
-                  ...current.filter(
-                    (item) => resultKey(item) !== resultKey(event.result),
-                  ),
-                  event.result,
-                ],
-                sortByRef.current,
-              ),
-            );
+            const key = resultKey(event.result);
 
             if (event.result.hasFullWeekend) {
-              const key = resultKey(event.result);
+              setRecentlyGone((current) =>
+                current.filter((item) => item.key !== key),
+              );
+              hitsBeforeSearch.current.delete(key);
+              setWeekends((current) =>
+                sortWeekends(
+                  [
+                    ...current.filter((item) => resultKey(item) !== key),
+                    event.result,
+                  ],
+                  sortByRef.current,
+                ),
+              );
               if (!previousHits.current.has(key)) {
                 previousHits.current.add(key);
                 announceOpening(event.result);
               }
+            } else {
+              const prior = hitsBeforeSearch.current.get(key);
+              if (prior) {
+                markGone(prior);
+              }
+              setWeekends((current) =>
+                sortWeekends(
+                  [
+                    ...current.filter((item) => resultKey(item) !== key),
+                    event.result,
+                  ],
+                  sortByRef.current,
+                ),
+              );
             }
           } else if (event.type === "error") {
             setProgress({ index: event.index, total: event.total });
@@ -471,10 +539,18 @@ export function Dashboard() {
               total: event.report.weekends.length + event.report.errors.length,
             });
 
-            const hitKeys = event.report.weekends
-              .filter((weekend) => weekend.hasFullWeekend)
-              .map(resultKey);
-            for (const key of hitKeys) previousHits.current.add(key);
+            const hitKeys = new Set(
+              event.report.weekends
+                .filter((weekend) => weekend.hasFullWeekend)
+                .map(resultKey),
+            );
+            for (const [key, weekend] of hitsBeforeSearch.current) {
+              if (!hitKeys.has(key)) {
+                markGone(weekend);
+              }
+            }
+            hitsBeforeSearch.current = new Map();
+            previousHits.current = hitKeys;
           }
         }
       }
@@ -490,7 +566,7 @@ export function Dashboard() {
         setIsChecking(false);
       }
     }
-  }, []);
+  }, [markGone]);
 
   useEffect(() => {
     let cancelled = false;
@@ -614,10 +690,17 @@ export function Dashboard() {
     const partyKey = `${party.partySize}:${party.tents}`;
     if (resultsPartyKey.current !== partyKey) {
       setWeekends([]);
+      setRecentlyGone([]);
       previousHits.current = new Set();
+      hitsBeforeSearch.current = new Map();
       resultsPartyKey.current = partyKey;
       return;
     }
+    setRecentlyGone((current) =>
+      current.filter((item) =>
+        resultMatchesFilters(item.weekend, parks, dates, nights),
+      ),
+    );
     setWeekends((current) => {
       const next = pruneWeekendsToFilters(current, parks, dates, nights);
       const keepKeys = new Set(
@@ -723,6 +806,14 @@ export function Dashboard() {
       ),
     [weekends, sortBy],
   );
+  const visibleGone = useMemo(
+    () =>
+      sortWeekends(
+        recentlyGone.map((item) => item.weekend),
+        sortBy,
+      ),
+    [recentlyGone, sortBy],
+  );
   const progressLabel =
     isChecking && progress.total > 0
       ? `${progress.index}/${progress.total}`
@@ -734,7 +825,11 @@ export function Dashboard() {
       ? `Searching ${progressLabel}`
       : "Searching…"
     : meta
-      ? `Updated ${formatCheckedAt(meta.checkedAt)}`
+      ? `Updated ${formatCheckedAt(meta.checkedAt)}${
+          visibleGone.length > 0
+            ? ` · ${visibleGone.length} gone`
+            : ""
+        }`
       : "Ready";
   const emptyMessage = !nightsContiguous
     ? "Choose consecutive nights to search."
@@ -742,7 +837,9 @@ export function Dashboard() {
       ? "Select at least one park."
       : isChecking
         ? "Looking for openings…"
-        : "No openings for these filters.";
+        : visibleGone.length > 0
+          ? "No openings left — recent ones faded below."
+          : "No openings for these filters.";
 
   return (
     <div className="page-shell">
@@ -920,7 +1017,9 @@ export function Dashboard() {
 
       {error ? <div className="banner error">{error}</div> : null}
 
-      <section className={`section ${fullHits.length > 0 ? "highlight" : ""}`}>
+      <section
+        className={`section ${fullHits.length > 0 || visibleGone.length > 0 ? "highlight" : ""}`}
+      >
         <div className="section-head">
           <h2>
             Openings
@@ -928,7 +1027,7 @@ export function Dashboard() {
               <span className="count">{fullHits.length}</span>
             ) : null}
           </h2>
-          {fullHits.length > 0 ? (
+          {fullHits.length > 0 || visibleGone.length > 0 ? (
             <div className="sort-toggle" role="group" aria-label="Sort openings">
               <span className="sort-label">Sort</span>
               <div className="sort-seg">
@@ -952,7 +1051,7 @@ export function Dashboard() {
             </div>
           ) : null}
         </div>
-        {fullHits.length > 0 ? (
+        {fullHits.length > 0 || visibleGone.length > 0 ? (
           <div className="result-list">
             {fullHits.map((weekend) => (
               <WeekendRow
@@ -987,6 +1086,9 @@ export function Dashboard() {
                   );
                 }}
               />
+            ))}
+            {visibleGone.map((weekend) => (
+              <GoneRow key={`gone:${resultKey(weekend)}`} weekend={weekend} />
             ))}
           </div>
         ) : isChecking ? (
@@ -1097,6 +1199,23 @@ function bookingUrlForSite(base: string, resourceId: string): string {
   } catch {
     return base;
   }
+}
+
+function GoneRow({ weekend }: { weekend: WeekendResult }) {
+  return (
+    <article className="result gone" aria-label="Opening no longer available">
+      <div className="result-main">
+        <div className="result-title">
+          <span className="park">{weekend.parkShortName}</span>
+          <span className="stay">{formatStay(weekend)}</span>
+          {weekend.driveMinutesFromHome != null ? (
+            <span className="drive">{weekend.driveMinutesFromHome} min</span>
+          ) : null}
+        </div>
+      </div>
+      <span className="gone-badge">Gone</span>
+    </article>
+  );
 }
 
 function WeekendRow({

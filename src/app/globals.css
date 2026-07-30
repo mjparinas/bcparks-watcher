@@ -465,6 +465,41 @@ body {
   border-radius: 0.9rem;
 }
 
+.result.gone {
+  opacity: 0.72;
+  border-style: dashed;
+  border-color: rgba(155, 59, 46, 0.28);
+  background: rgba(155, 59, 46, 0.04);
+  animation: gone-in 280ms ease-out;
+}
+
+.result.gone .park,
+.result.gone .stay,
+.result.gone .drive {
+  text-decoration: line-through;
+  text-decoration-thickness: 1px;
+}
+
+.gone-badge {
+  flex-shrink: 0;
+  color: var(--danger);
+  font-size: 0.72rem;
+  font-weight: 750;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+@keyframes gone-in {
+  from {
+    opacity: 0;
+    transform: translateY(-0.2rem);
+  }
+  to {
+    opacity: 0.72;
+    transform: none;
+  }
+}
+
 .result-main {
   min-width: 0;
   flex: 1;

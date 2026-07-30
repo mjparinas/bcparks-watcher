@@ -28,7 +28,10 @@ export async function GET() {
       tents: watcherConfig.party.tents,
       cars: watcherConfig.party.cars,
       subEquipmentCategoryId: watcherConfig.subEquipmentCategoryId,
-      label: "1 Tent",
+      label:
+        watcherConfig.party.tents === 1
+          ? "1 Tent"
+          : `${watcherConfig.party.tents} Tents`,
     },
     parks,
   });

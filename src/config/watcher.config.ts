@@ -55,6 +55,81 @@ export type PartyConfig = {
   cars: number;
 };
 
+/** GoingToCamp tent subtypes: 1 Tent / 2 Tent / 3 Tent */
+export const TENT_SUB_EQUIPMENT_IDS: Record<1 | 2 | 3, number> = {
+  1: -32768,
+  2: -32767,
+  3: -32766,
+};
+
+export type PartyOverrides = {
+  adults?: number;
+  kids?: number;
+  kidsAges?: number[];
+  tents?: number;
+  cars?: number;
+};
+
+function clampInt(value: number, min: number, max: number): number {
+  if (!Number.isFinite(value)) return min;
+  return Math.min(max, Math.max(min, Math.trunc(value)));
+}
+
+/** Keep kid ages aligned when the kids count changes. */
+export function kidsAgesForCount(count: number, defaults: number[]): number[] {
+  const n = clampInt(count, 0, 12);
+  if (n <= 0) return [];
+  if (n <= defaults.length) return defaults.slice(0, n);
+  const pad = defaults[defaults.length - 1] ?? 5;
+  return [...defaults, ...Array.from({ length: n - defaults.length }, () => pad)];
+}
+
+export function tentSubEquipmentCategoryId(tents: number): number {
+  const n = clampInt(tents, 1, 3) as 1 | 2 | 3;
+  return TENT_SUB_EQUIPMENT_IDS[n];
+}
+
+/**
+ * Apply UI/API party overrides on top of the base watcher config.
+ * Syncs partySize + tent equipment fields from the resulting party.
+ */
+export function applyPartyOverrides(
+  config: WatcherConfig,
+  overrides?: PartyOverrides,
+): WatcherConfig {
+  if (!overrides) return config;
+
+  const adults =
+    overrides.adults != null
+      ? clampInt(overrides.adults, 1, 20)
+      : config.party.adults;
+  const kidsAges =
+    overrides.kidsAges != null
+      ? overrides.kidsAges.map((age) => clampInt(age, 0, 17))
+      : overrides.kids != null
+        ? kidsAgesForCount(overrides.kids, config.party.kidsAges)
+        : config.party.kidsAges;
+  const tents =
+    overrides.tents != null
+      ? clampInt(overrides.tents, 1, 3)
+      : config.party.tents;
+  const cars =
+    overrides.cars != null
+      ? clampInt(overrides.cars, 0, 6)
+      : config.party.cars;
+
+  const party: PartyConfig = { adults, kidsAges, tents, cars };
+
+  return {
+    ...config,
+    party,
+    partySize: adults + kidsAges.length,
+    equipmentCategoryId: config.equipmentCategoryId,
+    subEquipmentCategoryId: tentSubEquipmentCategoryId(tents),
+    numEquipment: tents,
+  };
+}
+
 export type WatcherConfig = {
   /** Where drive-time estimates are measured from */
   homeBase: string;

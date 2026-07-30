@@ -93,6 +93,44 @@ function sortWeekends(weekends: WeekendResult[]): WeekendResult[] {
   });
 }
 
+type PartySettings = {
+  adults: number;
+  kids: number;
+  tents: number;
+  cars: number;
+};
+
+const DEFAULT_PARTY: PartySettings = {
+  adults: 2,
+  kids: 2,
+  tents: 1,
+  cars: 1,
+};
+
+function partyFromConfig(config: PublicConfig): PartySettings {
+  return {
+    adults: config.party?.adults ?? DEFAULT_PARTY.adults,
+    kids: config.party?.kidsAges?.length ?? DEFAULT_PARTY.kids,
+    tents: config.party?.tents ?? config.equipment?.tents ?? DEFAULT_PARTY.tents,
+    cars: config.party?.cars ?? config.equipment?.cars ?? DEFAULT_PARTY.cars,
+  };
+}
+
+function formatPartyLabel(
+  party: PartySettings,
+  kidsAges?: number[],
+): string {
+  const kidsPart =
+    party.kids <= 0
+      ? "no kids"
+      : kidsAges && kidsAges.length === party.kids
+        ? `kids ${kidsAges.join(" & ")}`
+        : `${party.kids} kid${party.kids === 1 ? "" : "s"}`;
+  const tentLabel = `${party.tents} tent${party.tents === 1 ? "" : "s"}`;
+  const carLabel = `${party.cars} car${party.cars === 1 ? "" : "s"}`;
+  return `${party.adults} adult${party.adults === 1 ? "" : "s"}, ${kidsPart}, ${tentLabel}, ${carLabel}`;
+}
+
 export function Dashboard() {
   const [config, setConfig] = useState<PublicConfig | null>(null);
   const [meta, setMeta] = useState<CheckMeta | null>(null);
@@ -106,16 +144,25 @@ export function Dashboard() {
     NotificationPermission | "unsupported"
   >("default");
   const [selectedParks, setSelectedParks] = useState<Set<string>>(new Set());
+  const [party, setParty] = useState<PartySettings>(DEFAULT_PARTY);
+  const [partyReady, setPartyReady] = useState(false);
   const previousHits = useRef<Set<string>>(new Set());
   const abortRef = useRef<AbortController | null>(null);
   const selectedParksRef = useRef(selectedParks);
+  const partyRef = useRef(party);
+  const skipPartyReload = useRef(true);
 
   useEffect(() => {
     selectedParksRef.current = selectedParks;
   }, [selectedParks]);
 
+  useEffect(() => {
+    partyRef.current = party;
+  }, [party]);
+
   const load = useCallback(async (parksOverride?: Set<string>) => {
     const parksToCheck = parksOverride ?? selectedParksRef.current;
+    const partyToUse = partyRef.current;
 
     abortRef.current?.abort();
     const controller = new AbortController();
@@ -135,6 +182,10 @@ export function Dashboard() {
 
     const params = new URLSearchParams({
       parks: Array.from(parksToCheck).join(","),
+      adults: String(partyToUse.adults),
+      kids: String(partyToUse.kids),
+      tents: String(partyToUse.tents),
+      cars: String(partyToUse.cars),
     });
 
     try {
@@ -251,8 +302,12 @@ export function Dashboard() {
       .then((data: PublicConfig) => {
         if (cancelled) return;
         const parks = new Set(data.parks.map((park) => park.shortName));
+        const nextParty = partyFromConfig(data);
         setConfig(data);
         setSelectedParks(parks);
+        setParty(nextParty);
+        partyRef.current = nextParty;
+        setPartyReady(true);
         void load(parks);
       })
       .catch(() => {
@@ -265,6 +320,8 @@ export function Dashboard() {
         void Notification.requestPermission().then((permission) => {
           if (!cancelled) setNotifyPermission(permission);
         });
+      } else {
+        setNotifyPermission(Notification.permission);
       }
     } else {
       queueMicrotask(() => {
@@ -287,6 +344,21 @@ export function Dashboard() {
     return () => window.clearInterval(id);
   }, [autoRefresh, config, load]);
 
+  // Restart search when party settings change (after initial load from config).
+  useEffect(() => {
+    if (!partyReady || !config) return;
+    if (skipPartyReload.current) {
+      skipPartyReload.current = false;
+      return;
+    }
+    const id = window.setTimeout(() => {
+      void load();
+    }, 350);
+    return () => window.clearTimeout(id);
+    // Intentionally keyed on party fields only — not load/config identity.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [party.adults, party.kids, party.tents, party.cars, partyReady]);
+
   const requestNotifications = async () => {
     if (!("Notification" in window)) return;
     const permission = await Notification.requestPermission();
@@ -301,6 +373,13 @@ export function Dashboard() {
       void load(next);
       return next;
     });
+  };
+
+  const updateParty = <K extends keyof PartySettings>(
+    key: K,
+    value: PartySettings[K],
+  ) => {
+    setParty((current) => ({ ...current, [key]: value }));
   };
 
   const fullHits = weekends.filter((w) => w.hasFullWeekend);
@@ -370,12 +449,39 @@ export function Dashboard() {
             : meta
               ? `Last check ${formatCheckedAt(meta.checkedAt)} · every ${meta.pollIntervalMinutes} min`
               : "Waiting for first check…"}
-          {config?.party
-            ? ` · ${config.party.adults} adults, kids ${config.party.kidsAges.join(" & ")}, ${config.party.tents} tent, ${config.party.cars} car`
-            : config
-              ? ` · party of ${config.partySize}`
-              : null}
+          {` · ${formatPartyLabel(party, meta?.party?.kidsAges ?? config?.party?.kidsAges)}`}
         </p>
+
+        <div className="party-controls" role="group" aria-label="Party size">
+          <Stepper
+            label="Adults"
+            value={party.adults}
+            min={1}
+            max={12}
+            onChange={(value) => updateParty("adults", value)}
+          />
+          <Stepper
+            label="Kids"
+            value={party.kids}
+            min={0}
+            max={8}
+            onChange={(value) => updateParty("kids", value)}
+          />
+          <Stepper
+            label="Tents"
+            value={party.tents}
+            min={1}
+            max={3}
+            onChange={(value) => updateParty("tents", value)}
+          />
+          <Stepper
+            label="Cars"
+            value={party.cars}
+            min={0}
+            max={4}
+            onChange={(value) => updateParty("cars", value)}
+          />
+        </div>
 
         {isChecking && progress.total > 0 ? (
           <div
@@ -451,6 +557,49 @@ export function Dashboard() {
         </section>
       ) : null}
     </div>
+  );
+}
+
+function Stepper({
+  label,
+  value,
+  min,
+  max,
+  onChange,
+}: {
+  label: string;
+  value: number;
+  min: number;
+  max: number;
+  onChange: (value: number) => void;
+}) {
+  return (
+    <label className="stepper">
+      <span className="stepper-label">{label}</span>
+      <span className="stepper-controls">
+        <button
+          type="button"
+          className="stepper-btn"
+          aria-label={`Decrease ${label}`}
+          disabled={value <= min}
+          onClick={() => onChange(Math.max(min, value - 1))}
+        >
+          −
+        </button>
+        <span className="stepper-value" aria-live="polite">
+          {value}
+        </span>
+        <button
+          type="button"
+          className="stepper-btn"
+          aria-label={`Increase ${label}`}
+          disabled={value >= max}
+          onClick={() => onChange(Math.min(max, value + 1))}
+        >
+          +
+        </button>
+      </span>
+    </label>
   );
 }
 

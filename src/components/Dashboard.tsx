@@ -416,8 +416,6 @@ export function Dashboard() {
       ? `Checking ${progress.index}/${progress.total}`
       : null;
 
-  const activeStart = meta?.startDate ?? dates.startDate;
-  const activeEnd = meta?.endDate ?? dates.endDate;
   const selectedCount = selectedParks.size;
   const totalParks = config?.parks.length ?? 0;
   const parkWatchLabel =
@@ -437,7 +435,7 @@ export function Dashboard() {
         <p className="brand">BC Parks Watcher</p>
         <h1>
           {config
-            ? `Fri–Sun · ${formatRangeLabel(activeStart, activeEnd)}`
+            ? `Fri–Sun · ${formatRangeLabel(dates.startDate, dates.endDate)}`
             : "Weekend availability"}
         </h1>
         <p className="lede">

@@ -14,6 +14,7 @@ import {
   type CheckEvent,
   type CheckMeta,
   type NightAvailability,
+  type OpenSite,
   type WeekendResult,
 } from "./types";
 import {
@@ -34,6 +35,11 @@ export type CheckOverrides = Partial<WatcherConfig> & {
   partyOverrides?: PartyOverrides;
   dateOverrides?: DateOverrides;
 };
+
+/** How many park/weekend jobs to run at once */
+const PARK_WINDOW_CONCURRENCY = 4;
+/** Max sites to confirm via processedAvailability per park/weekend */
+const MAX_VERIFY_SITES = 10;
 
 function resolveConfig(overrides?: CheckOverrides): WatcherConfig {
   const { partyOverrides, dateOverrides, ...rest } = overrides ?? {};
@@ -91,12 +97,9 @@ function buildMeta(
 }
 
 /**
- * A "full weekend" means the SAME campsite is online-reservable for every
- * night in the stay. We ignore:
- * - different sites open on different nights
- * - continuous-map false positives with a blocked night
- * - FCFS / non-reservable sites (processedAvailability 3) like "B33 is not
- *   reservable"
+ * Same campsite online-reservable for every night in the stay.
+ * Uses daily map availability only (no continuous pass), skips booked
+ * child maps, and caps processedAvailability verification.
  */
 async function checkParkWindow(
   config: WatcherConfig,
@@ -106,8 +109,9 @@ async function checkParkWindow(
   const startDate = formatDate(window.arrival);
   const endDateApi = formatDate(window.nights[window.nights.length - 1]);
   const departureDate = formatDate(window.departure);
+  const nightCount = window.nights.length;
 
-  const shared = {
+  const daily = await fetchParkAvailability({
     rootMapId: park.rootMapId,
     resourceLocationId: park.resourceLocationId,
     startDate,
@@ -117,45 +121,40 @@ async function checkParkWindow(
     subEquipmentCategoryId: config.subEquipmentCategoryId,
     numEquipment: config.numEquipment,
     mapIds: park.mapIds,
-  };
+    getDailyAvailability: true,
+  });
 
-  const [continuous, daily] = await Promise.all([
-    fetchParkAvailability({ ...shared, getDailyAvailability: false }),
-    fetchParkAvailability({ ...shared, getDailyAvailability: true }),
-  ]);
+  const candidates: OpenSite[] = [];
 
-  const nightCount = window.nights.length;
-  const candidates: string[] = [];
-
-  for (const [resourceId, stayCodes] of Object.entries(continuous)) {
-    if (!stayCodes.some((code) => code === AVAILABILITY_OPEN)) continue;
-
-    const nightCodes = daily[resourceId];
-    if (!nightCodes || nightCodes.length < nightCount) continue;
-
-    const everyNightOpen = nightCodes
+  for (const [resourceId, site] of Object.entries(daily)) {
+    if (site.nights.length < nightCount) continue;
+    const everyNightOpen = site.nights
       .slice(0, nightCount)
       .every((code) => code === AVAILABILITY_OPEN);
     if (!everyNightOpen) continue;
-
-    candidates.push(resourceId);
+    candidates.push({ resourceId, mapId: site.mapId });
   }
 
-  // Confirm with processedAvailability so FCFS / non-reservable pads drop out
-  const verified = await Promise.all(
-    candidates.map(async (resourceId) =>
-      (await isOnlineReservableStay({
-        resourceId,
-        startDate,
-        endDate: endDateApi,
-        nightCount,
-      }))
-        ? resourceId
-        : null,
-    ),
-  );
+  const toVerify = candidates.slice(0, MAX_VERIFY_SITES);
+  const sitesCapped = candidates.length > MAX_VERIFY_SITES;
 
-  const fullWeekendSites = verified.filter(Boolean).length;
+  const verified = (
+    await Promise.all(
+      toVerify.map(async (site) =>
+        (await isOnlineReservableStay({
+          resourceId: site.resourceId,
+          startDate,
+          endDate: endDateApi,
+          nightCount,
+        }))
+          ? site
+          : null,
+      ),
+    )
+  ).filter((site): site is OpenSite => site != null);
+
+  const fullWeekendSites = verified.length;
+  const first = verified[0];
 
   const nights: NightAvailability[] = window.nights.map((date) => ({
     date: formatDate(date),
@@ -173,22 +172,30 @@ async function checkParkWindow(
     departureDate,
     nights,
     fullWeekendSites,
+    openSites: verified,
+    sitesCapped,
     bookingUrl: buildBookingUrl({
-      mapId: park.rootMapId,
+      mapId: first?.mapId ?? park.rootMapId,
       resourceLocationId: park.resourceLocationId,
       startDate,
       endDate: departureDate,
       partySize: config.partySize,
       equipmentCategoryId: config.equipmentCategoryId,
       subEquipmentCategoryId: config.subEquipmentCategoryId,
+      resourceId: first?.resourceId,
     }),
     hasAnyAvailability: fullWeekendSites > 0,
     hasFullWeekend: fullWeekendSites > 0,
   };
 }
 
+type Job = {
+  park: ParkConfig;
+  window: WeekendWindow;
+};
+
 /**
- * Yields availability results one park/weekend at a time for progressive UI.
+ * Yields availability results as park/weekend jobs finish (parallel).
  */
 export async function* streamAvailabilityCheck(
   overrides?: CheckOverrides,
@@ -203,14 +210,17 @@ export async function* streamAvailabilityCheck(
     config.endDate,
     config.nights,
   );
-  const total = enabledParks.length * windows.length;
+  const jobs: Job[] = enabledParks.flatMap((park) =>
+    windows.map((window) => ({ park, window })),
+  );
+  const total = jobs.length;
   const weekends: WeekendResult[] = [];
   const errors: string[] = [];
   const meta = buildMeta(config, enabledParks, total);
 
   yield { type: "meta", meta };
 
-  if (enabledParks.length === 0) {
+  if (jobs.length === 0) {
     yield {
       type: "done",
       report: {
@@ -222,22 +232,66 @@ export async function* streamAvailabilityCheck(
     return;
   }
 
-  let index = 0;
-  for (const park of enabledParks) {
-    for (const window of windows) {
-      index += 1;
-      const startDate = formatDate(window.arrival);
+  const concurrency = Math.min(PARK_WINDOW_CONCURRENCY, jobs.length);
+  let nextJob = 0;
+  let active = 0;
+  let completed = 0;
+  const eventQueue: CheckEvent[] = [];
+  let wake: (() => void) | null = null;
+
+  const signal = () => {
+    wake?.();
+    wake = null;
+  };
+
+  const startJob = () => {
+    if (nextJob >= jobs.length) return;
+    const job = jobs[nextJob];
+    nextJob += 1;
+    active += 1;
+
+    void (async () => {
+      const startDate = formatDate(job.window.arrival);
       try {
-        const result = await checkParkWindow(config, park, window);
+        const result = await checkParkWindow(config, job.park, job.window);
         weekends.push(result);
-        yield { type: "result", index, total, result };
+        completed += 1;
+        eventQueue.push({
+          type: "result",
+          index: completed,
+          total,
+          result,
+        });
       } catch (error) {
         const message =
           error instanceof Error ? error.message : "Unknown park check error";
-        const labeled = `${park.shortName} ${startDate}: ${message}`;
+        const labeled = `${job.park.shortName} ${startDate}: ${message}`;
         errors.push(labeled);
-        yield { type: "error", index, total, error: labeled };
+        completed += 1;
+        eventQueue.push({
+          type: "error",
+          index: completed,
+          total,
+          error: labeled,
+        });
+      } finally {
+        active -= 1;
+        signal();
       }
+    })();
+  };
+
+  while (completed < jobs.length) {
+    while (active < concurrency && nextJob < jobs.length) {
+      startJob();
+    }
+    if (eventQueue.length === 0) {
+      await new Promise<void>((resolve) => {
+        wake = resolve;
+      });
+    }
+    while (eventQueue.length > 0) {
+      yield eventQueue.shift()!;
     }
   }
 
@@ -283,10 +337,13 @@ export async function notifyIfAvailable(
   if (hits.length === 0) return;
 
   const text = hits
-    .map(
-      (hit) =>
-        `🏕️ ${hit.parkShortName}: ${hit.arrivalDate} → ${hit.departureDate} — ${hit.fullWeekendSites} site(s)\n${hit.bookingUrl}`,
-    )
+    .map((hit) => {
+      const sites = hit.openSites
+        .map((site) => site.resourceId)
+        .slice(0, 5)
+        .join(", ");
+      return `🏕️ ${hit.parkShortName}: ${hit.arrivalDate} → ${hit.departureDate} — ${hit.fullWeekendSites} site(s)${sites ? ` [${sites}]` : ""}\n${hit.bookingUrl}`;
+    })
     .join("\n\n");
 
   await fetch(url, {

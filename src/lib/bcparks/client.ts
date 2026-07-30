@@ -17,12 +17,40 @@ const DEFAULT_HEADERS: HeadersInit = {
 
 const RETRYABLE_STATUS = new Set([403, 429, 502, 503, 504]);
 const MAX_ATTEMPTS = 4;
+const CACHE_TTL_MS = 45_000;
+
+type CacheEntry = {
+  expires: number;
+  value: unknown;
+};
+
+const responseCache = new Map<string, CacheEntry>();
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function readCache<T>(url: string): T | null {
+  const hit = responseCache.get(url);
+  if (!hit) return null;
+  if (hit.expires <= Date.now()) {
+    responseCache.delete(url);
+    return null;
+  }
+  return hit.value as T;
+}
+
+function writeCache(url: string, value: unknown): void {
+  responseCache.set(url, {
+    expires: Date.now() + CACHE_TTL_MS,
+    value,
+  });
+}
+
 async function getJson<T>(url: string): Promise<T> {
+  const cached = readCache<T>(url);
+  if (cached != null) return cached;
+
   let lastError: Error | null = null;
 
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
@@ -32,7 +60,9 @@ async function getJson<T>(url: string): Promise<T> {
     });
 
     if (response.ok) {
-      return (await response.json()) as T;
+      const data = (await response.json()) as T;
+      writeCache(url, data);
+      return data;
     }
 
     const message = `BC Parks API ${response.status} for ${url}`;
@@ -42,7 +72,6 @@ async function getJson<T>(url: string): Promise<T> {
       throw lastError;
     }
 
-    // Back off harder on WAF / rate-limit responses
     await sleep(400 * 2 ** (attempt - 1) + Math.floor(Math.random() * 200));
   }
 
@@ -119,11 +148,18 @@ function buildMapUrl(query: MapQuery): string {
   return `${BCPARKS_BASE}/api/availability/map?${params.toString()}`;
 }
 
+function codesHaveOpen(codes: number[] | undefined): boolean {
+  return (codes ?? []).some((code) => code === AVAILABILITY_OPEN);
+}
+
+export type SiteDailyAvailability = {
+  nights: number[];
+  mapId: number;
+};
+
 /**
- * Recursively walk park map tree and merge per-site availability.
- * When getDailyAvailability is true, each site maps to one code per night.
- * When false, each site maps to a single code for the whole stay window
- * (same campsite bookable for the entire Friday→Sunday reservation).
+ * Walk park map tree and merge per-site daily availability.
+ * Fully booked child maps (no open nights on the link) are skipped.
  */
 export async function fetchParkAvailability(options: {
   rootMapId: number;
@@ -135,10 +171,9 @@ export async function fetchParkAvailability(options: {
   subEquipmentCategoryId?: number;
   numEquipment?: number;
   getDailyAvailability: boolean;
-  /** If set, only these map nodes are queried (no auto-discovery). */
   mapIds?: number[];
-}): Promise<Record<string, number[]>> {
-  const siteNights: Record<string, number[]> = {};
+}): Promise<Record<string, SiteDailyAvailability>> {
+  const siteNights: Record<string, SiteDailyAvailability> = {};
   const numEquipment = options.numEquipment ?? 1;
 
   const visit = async (mapId: number, depth: number, seen: Set<number>) => {
@@ -162,10 +197,16 @@ export async function fetchParkAvailability(options: {
     for (const [resourceId, days] of Object.entries(
       data.resourceAvailabilities ?? {},
     )) {
-      siteNights[resourceId] = days.map((d) => d.availability);
+      siteNights[resourceId] = {
+        nights: days.map((d) => d.availability),
+        mapId,
+      };
     }
 
-    for (const childId of Object.keys(data.mapLinkAvailabilities ?? {})) {
+    const links = Object.entries(data.mapLinkAvailabilities ?? {});
+    for (const [childId, linkCodes] of links) {
+      // Skip campgrounds/maps with no open nights in this stay window
+      if (!codesHaveOpen(linkCodes)) continue;
       await visit(Number(childId), depth + 1, seen);
     }
   };
@@ -193,7 +234,7 @@ export async function fetchParkDailyAvailability(options: {
   subEquipmentCategoryId?: number;
   numEquipment?: number;
   mapIds?: number[];
-}): Promise<Record<string, number[]>> {
+}): Promise<Record<string, SiteDailyAvailability>> {
   return fetchParkAvailability({
     ...options,
     getDailyAvailability: true,
@@ -208,6 +249,7 @@ export function buildBookingUrl(options: {
   partySize: number;
   equipmentCategoryId: number;
   subEquipmentCategoryId?: number;
+  resourceId?: string | number;
 }): string {
   const params = new URLSearchParams({
     mapId: String(options.mapId),
@@ -223,6 +265,10 @@ export function buildBookingUrl(options: {
     partySize: String(options.partySize),
     resourceLocationId: String(options.resourceLocationId),
   });
+
+  if (options.resourceId != null) {
+    params.set("resourceId", String(options.resourceId));
+  }
 
   return `${BCPARKS_BASE}/create-booking/results?${params.toString()}`;
 }

@@ -152,6 +152,91 @@ function nightSelectionLabel(nights: DayOfWeek[]): string {
   return orderContiguousNights(nights).map(shortDayLabel).join("+");
 }
 
+const STORAGE_KEY = "bcparks-watcher-filters-v1";
+
+type SavedFilters = {
+  parks?: string[];
+  party?: PartySettings;
+  dates?: DateSettings;
+  nights?: string[];
+  autoRefresh?: boolean;
+};
+
+function readSavedFilters(): SavedFilters | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = window.localStorage.getItem(STORAGE_KEY);
+    if (!raw) return null;
+    return JSON.parse(raw) as SavedFilters;
+  } catch {
+    return null;
+  }
+}
+
+function writeSavedFilters(filters: SavedFilters): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(filters));
+  } catch {
+    // ignore quota / private mode
+  }
+}
+
+function todayIsoLocal(): string {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Vancouver",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(new Date());
+}
+
+function playAlertTone(): void {
+  try {
+    const Ctx =
+      window.AudioContext ||
+      (window as unknown as { webkitAudioContext?: typeof AudioContext })
+        .webkitAudioContext;
+    if (!Ctx) return;
+    const ctx = new Ctx();
+    const beep = (freq: number, start: number, duration: number) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = "sine";
+      osc.frequency.value = freq;
+      gain.gain.setValueAtTime(0.0001, start);
+      gain.gain.exponentialRampToValueAtTime(0.1, start + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.0001, start + duration);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(start);
+      osc.stop(start + duration + 0.03);
+    };
+    const t = ctx.currentTime;
+    beep(880, t, 0.16);
+    beep(1245, t + 0.18, 0.22);
+    void ctx.resume();
+  } catch {
+    // autoplay / unsupported — ignore
+  }
+}
+
+function announceOpening(weekend: WeekendResult): void {
+  playAlertTone();
+  if (!("Notification" in window) || Notification.permission !== "granted") {
+    return;
+  }
+  const sites = (weekend.openSites ?? [])
+    .slice(0, 3)
+    .map((site) => site.resourceId)
+    .join(", ");
+  new Notification("BC Parks site open", {
+    body: `${weekend.parkShortName}: ${weekend.arrivalDate} → ${weekend.departureDate} · ${weekend.fullWeekendSites} site(s)${sites ? ` · ${sites}` : ""}`,
+    requireInteraction: true,
+    tag: resultKey(weekend),
+  });
+}
+
 export function Dashboard() {
   const [config, setConfig] = useState<PublicConfig | null>(null);
   const [meta, setMeta] = useState<CheckMeta | null>(null);
@@ -217,10 +302,12 @@ export function Dashboard() {
     abortRef.current = controller;
 
     setError(null);
-    setWeekends([]);
     setErrors([]);
     setProgress({ index: 0, total: 0 });
-    previousHits.current = new Set();
+    // Keep prior bookable results visible until replaced by this run.
+    setWeekends((current) =>
+      current.filter((weekend) => parksToCheck.has(weekend.parkShortName)),
+    );
 
     if (!areNightsContiguous(nightsToUse)) {
       setIsChecking(false);
@@ -290,18 +377,11 @@ export function Dashboard() {
               ]),
             );
 
-            if (
-              event.result.hasFullWeekend &&
-              typeof window !== "undefined" &&
-              "Notification" in window &&
-              Notification.permission === "granted"
-            ) {
+            if (event.result.hasFullWeekend) {
               const key = resultKey(event.result);
               if (!previousHits.current.has(key)) {
                 previousHits.current.add(key);
-                new Notification("BC Parks weekend open", {
-                  body: `${event.result.parkShortName}: ${event.result.arrivalDate} → ${event.result.departureDate}`,
-                });
+                announceOpening(event.result);
               }
             }
           } else if (event.type === "error") {
@@ -333,7 +413,7 @@ export function Dashboard() {
             const hitKeys = event.report.weekends
               .filter((weekend) => weekend.hasFullWeekend)
               .map(resultKey);
-            previousHits.current = new Set(hitKeys);
+            for (const key of hitKeys) previousHits.current.add(key);
           }
         }
       }
@@ -358,10 +438,53 @@ export function Dashboard() {
       .then((response) => response.json())
       .then((data: PublicConfig) => {
         if (cancelled) return;
-        const parks = new Set(data.parks.map((park) => park.shortName));
-        const nextParty = partyFromConfig(data);
-        const nextDates = datesFromConfig(data);
-        const nextNights = nightsFromConfig(data);
+        const saved = readSavedFilters();
+        const available = data.parks.map((park) => park.shortName);
+        const availableSet = new Set(available);
+
+        const parks = new Set(
+          saved?.parks?.length
+            ? saved.parks.filter((name) => availableSet.has(name))
+            : available,
+        );
+        if (parks.size === 0) {
+          for (const name of available) parks.add(name);
+        }
+
+        const nextParty = saved?.party
+          ? {
+              partySize: saved.party.partySize || data.partySize,
+              tents: saved.party.tents || data.tents,
+            }
+          : partyFromConfig(data);
+
+        const configDates = datesFromConfig(data);
+        const today = todayIsoLocal();
+        let nextDates = saved?.dates
+          ? {
+              startDate: saved.dates.startDate || configDates.startDate,
+              endDate: saved.dates.endDate || configDates.endDate,
+            }
+          : configDates;
+        if (nextDates.startDate < today) {
+          nextDates = { ...nextDates, startDate: today };
+        }
+        if (nextDates.startDate >= nextDates.endDate) {
+          nextDates = configDates;
+        }
+
+        const savedNights = (saved?.nights ?? [])
+          .map((night) => night.toLowerCase())
+          .filter(isDayOfWeek);
+        const nextNights =
+          savedNights.length > 0 && areNightsContiguous(savedNights)
+            ? orderContiguousNights(savedNights)
+            : nightsFromConfig(data);
+
+        if (typeof saved?.autoRefresh === "boolean") {
+          setAutoRefresh(saved.autoRefresh);
+        }
+
         setConfig(data);
         setSelectedParks(parks);
         setParty(nextParty);
@@ -397,6 +520,17 @@ export function Dashboard() {
       abortRef.current?.abort();
     };
   }, [load]);
+
+  useEffect(() => {
+    if (!settingsReady) return;
+    writeSavedFilters({
+      parks: Array.from(selectedParks),
+      party,
+      dates,
+      nights,
+      autoRefresh,
+    });
+  }, [settingsReady, selectedParks, party, dates, nights, autoRefresh]);
 
   useEffect(() => {
     if (!autoRefresh || !config) return;
@@ -695,7 +829,7 @@ export function Dashboard() {
               />
             ))}
           </div>
-        ) : isChecking ? (
+        ) : isChecking && fullHits.length === 0 ? (
           <div className="skeleton" />
         ) : null}
       </section>
@@ -790,6 +924,20 @@ function Stepper({
   );
 }
 
+function formatSiteId(resourceId: string): string {
+  return resourceId.startsWith("-") ? resourceId.slice(1) : resourceId;
+}
+
+function bookingUrlForSite(base: string, resourceId: string): string {
+  try {
+    const url = new URL(base);
+    url.searchParams.set("resourceId", resourceId);
+    return url.toString();
+  } catch {
+    return base;
+  }
+}
+
 function WeekendRow({
   weekend,
   featured = false,
@@ -797,6 +945,8 @@ function WeekendRow({
   weekend: WeekendResult;
   featured?: boolean;
 }) {
+  const sites = weekend.openSites ?? [];
+
   return (
     <article className={`result ${featured ? "featured" : ""}`}>
       <div className="result-main">
@@ -824,10 +974,31 @@ function WeekendRow({
           >
             <em>Sites</em>
             <strong>
-              {weekend.hasFullWeekend ? weekend.fullWeekendSites : "—"}
+              {weekend.hasFullWeekend
+                ? `${weekend.fullWeekendSites}${weekend.sitesCapped ? "+" : ""}`
+                : "—"}
             </strong>
           </span>
         </div>
+        {sites.length > 0 ? (
+          <div className="site-ids" aria-label="Open site IDs">
+            {sites.map((site) => (
+              <a
+                key={site.resourceId}
+                className="site-id"
+                href={bookingUrlForSite(weekend.bookingUrl, site.resourceId)}
+                target="_blank"
+                rel="noreferrer"
+                title={`Resource ${site.resourceId} · map ${site.mapId}`}
+              >
+                {formatSiteId(site.resourceId)}
+              </a>
+            ))}
+            {weekend.sitesCapped ? (
+              <span className="site-id muted">more unverified</span>
+            ) : null}
+          </div>
+        ) : null}
       </div>
       <a
         className="book"

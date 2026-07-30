@@ -38,6 +38,11 @@ export type NightAvailability = {
   availableSites: number;
 };
 
+export type OpenSite = {
+  resourceId: string;
+  mapId: number;
+};
+
 export type WeekendResult = {
   parkName: string;
   parkShortName: string;
@@ -49,8 +54,12 @@ export type WeekendResult = {
   /** Departure date (morning after last night) */
   departureDate: string;
   nights: NightAvailability[];
-  /** Sites with every selected night open */
+  /** Sites with every selected night open (verified online-reservable) */
   fullWeekendSites: number;
+  /** Verified open sites (capped for display / deep links) */
+  openSites: OpenSite[];
+  /** True when more daily candidates existed than we verified */
+  sitesCapped?: boolean;
   bookingUrl: string;
   hasAnyAvailability: boolean;
   hasFullWeekend: boolean;

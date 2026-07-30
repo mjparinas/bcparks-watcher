@@ -152,6 +152,41 @@ function nightSelectionLabel(nights: DayOfWeek[]): string {
   return orderContiguousNights(nights).map(shortDayLabel).join("+");
 }
 
+function resultMatchesFilters(
+  weekend: WeekendResult,
+  parks: Set<string>,
+  dates: DateSettings,
+  nights: DayOfWeek[],
+): boolean {
+  if (!parks.has(weekend.parkShortName)) return false;
+  if (weekend.arrivalDate < dates.startDate) return false;
+  if (weekend.departureDate >= dates.endDate) return false;
+  if (!areNightsContiguous(nights)) return false;
+
+  const ordered = orderContiguousNights(nights);
+  if (weekend.nights.length !== ordered.length) return false;
+
+  for (let i = 0; i < ordered.length; i += 1) {
+    const nightDate = weekend.nights[i]?.date;
+    if (!nightDate) return false;
+    const dow = new Date(`${nightDate}T12:00:00Z`).getUTCDay();
+    if (DAYS_OF_WEEK[dow] !== ordered[i]) return false;
+  }
+
+  return true;
+}
+
+function pruneWeekendsToFilters(
+  weekends: WeekendResult[],
+  parks: Set<string>,
+  dates: DateSettings,
+  nights: DayOfWeek[],
+): WeekendResult[] {
+  return weekends.filter((weekend) =>
+    resultMatchesFilters(weekend, parks, dates, nights),
+  );
+}
+
 const STORAGE_KEY = "bcparks-watcher-filters-v1";
 
 type SavedFilters = {
@@ -261,6 +296,8 @@ export function Dashboard() {
   const datesRef = useRef(dates);
   const nightsRef = useRef(nights);
   const skipSettingsReload = useRef(true);
+  /** Party signature used for the results currently on screen */
+  const resultsPartyKey = useRef(`${party.partySize}:${party.tents}`);
 
   const nightsContiguous = useMemo(
     () => areNightsContiguous(nights),
@@ -304,10 +341,30 @@ export function Dashboard() {
     setError(null);
     setErrors([]);
     setProgress({ index: 0, total: 0 });
-    // Keep prior bookable results visible until replaced by this run.
-    setWeekends((current) =>
-      current.filter((weekend) => parksToCheck.has(weekend.parkShortName)),
-    );
+
+    const partyKey = `${partyToUse.partySize}:${partyToUse.tents}`;
+    if (resultsPartyKey.current !== partyKey) {
+      // Party/tents change availability — drop all sticky results.
+      setWeekends([]);
+      previousHits.current = new Set();
+      resultsPartyKey.current = partyKey;
+    } else {
+      setWeekends((current) => {
+        const next = pruneWeekendsToFilters(
+          current,
+          parksToCheck,
+          datesToUse,
+          nightsToUse,
+        );
+        const keepKeys = new Set(
+          next.filter((weekend) => weekend.hasFullWeekend).map(resultKey),
+        );
+        previousHits.current = new Set(
+          [...previousHits.current].filter((key) => keepKeys.has(key)),
+        );
+        return next;
+      });
+    }
 
     if (!areNightsContiguous(nightsToUse)) {
       setIsChecking(false);
@@ -318,6 +375,8 @@ export function Dashboard() {
     setIsChecking(true);
 
     if (parksToCheck.size === 0) {
+      setWeekends([]);
+      previousHits.current = new Set();
       setIsChecking(false);
       return;
     }
@@ -404,6 +463,7 @@ export function Dashboard() {
                 event.report.weekends.length + event.report.errors.length,
             });
             setWeekends(event.report.weekends);
+            resultsPartyKey.current = `${partyRef.current.partySize}:${partyRef.current.tents}`;
             setErrors(event.report.errors);
             setProgress({
               index: event.report.weekends.length + event.report.errors.length,
@@ -541,7 +601,36 @@ export function Dashboard() {
     return () => window.clearInterval(id);
   }, [autoRefresh, config, load]);
 
-  // Restart search when party, date, or night settings change (after initial load).
+  // Drop sticky results immediately when filters change (before search restarts).
+  useEffect(() => {
+    if (!settingsReady) return;
+    const parks = selectedParks;
+    const partyKey = `${party.partySize}:${party.tents}`;
+    if (resultsPartyKey.current !== partyKey) {
+      setWeekends([]);
+      previousHits.current = new Set();
+      resultsPartyKey.current = partyKey;
+      return;
+    }
+    setWeekends((current) => {
+      const next = pruneWeekendsToFilters(current, parks, dates, nights);
+      const keepKeys = new Set(
+        next.filter((weekend) => weekend.hasFullWeekend).map(resultKey),
+      );
+      previousHits.current = new Set(
+        [...previousHits.current].filter((key) => keepKeys.has(key)),
+      );
+      return next;
+    });
+  }, [
+    settingsReady,
+    selectedParks,
+    dates.startDate,
+    dates.endDate,
+    nightsKey(nights),
+    party.partySize,
+    party.tents,
+  ]);
   useEffect(() => {
     if (!settingsReady || !config) return;
     if (skipSettingsReload.current) {

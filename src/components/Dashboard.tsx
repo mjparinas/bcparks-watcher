@@ -32,6 +32,8 @@ type PublicConfig = {
     shortName: string;
     driveMinutesFromHome?: number;
   }>;
+  /** True when this deploy runs on Vercel (BC Parks often blocks that egress). */
+  bcParksEgressBlocked?: boolean;
 };
 
 function formatCheckedAt(iso: string): string {
@@ -1181,6 +1183,14 @@ export function Dashboard() {
           </div>
         ) : null}
       </header>
+
+      {config?.bcParksEgressBlocked ? (
+        <div className="banner error">
+          BC Parks is blocking this Vercel server&apos;s IP (Azure Front Door
+          403). Hosting the UI here is fine — run searches with{" "}
+          <code>npm run dev</code> locally.
+        </div>
+      ) : null}
 
       {error ? <div className="banner error">{error}</div> : null}
 

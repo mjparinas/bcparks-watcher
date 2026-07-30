@@ -291,6 +291,23 @@ body {
   cursor: pointer;
 }
 
+.park-chip {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.35rem;
+}
+
+.park-drive {
+  font-size: 0.72rem;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.72;
+}
+
+.park-chip.selected .park-drive {
+  opacity: 0.85;
+}
+
 .day-chip {
   min-width: 2.55rem;
   text-align: center;
@@ -349,6 +366,25 @@ body {
     linear-gradient(135deg, rgba(47, 107, 79, 0.1), rgba(42, 111, 124, 0.06)),
     var(--panel);
   border: 1px solid rgba(47, 107, 79, 0.16);
+}
+
+.section-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem 1rem;
+  margin: 0 0 0.85rem;
+}
+
+.section-head h2 {
+  margin: 0;
+}
+
+.sort-toggle {
+  display: inline-flex;
+  gap: 0.65rem;
+  align-items: baseline;
 }
 
 .section h2 {

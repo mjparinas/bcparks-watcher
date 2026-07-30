@@ -63,16 +63,32 @@ function resultKey(weekend: WeekendResult): string {
   return `${weekend.parkShortName}:${weekend.arrivalDate}:${weekend.departureDate}`;
 }
 
-function sortWeekends(weekends: WeekendResult[]): WeekendResult[] {
+type SortBy = "date" | "distance";
+
+function isSortBy(value: unknown): value is SortBy {
+  return value === "date" || value === "distance";
+}
+
+function sortWeekends(
+  weekends: WeekendResult[],
+  sortBy: SortBy = "date",
+): WeekendResult[] {
   return [...weekends].sort((a, b) => {
-    if (a.arrivalDate !== b.arrivalDate) {
-      return a.arrivalDate.localeCompare(b.arrivalDate);
-    }
     const driveDiff =
       (a.driveMinutesFromHome ?? Number.MAX_SAFE_INTEGER) -
       (b.driveMinutesFromHome ?? Number.MAX_SAFE_INTEGER);
+    const dateDiff = a.arrivalDate.localeCompare(b.arrivalDate);
+    const nameDiff = a.parkShortName.localeCompare(b.parkShortName);
+
+    if (sortBy === "distance") {
+      if (driveDiff !== 0) return driveDiff;
+      if (dateDiff !== 0) return dateDiff;
+      return nameDiff;
+    }
+
+    if (dateDiff !== 0) return dateDiff;
     if (driveDiff !== 0) return driveDiff;
-    return a.parkShortName.localeCompare(b.parkShortName);
+    return nameDiff;
   });
 }
 
@@ -169,6 +185,7 @@ type SavedFilters = {
   dates?: DateSettings;
   nights?: string[];
   autoRefresh?: boolean;
+  sortBy?: SortBy;
 };
 
 function readSavedFilters(): SavedFilters | null {
@@ -262,6 +279,7 @@ export function Dashboard() {
   const [party, setParty] = useState<PartySettings>(DEFAULT_PARTY);
   const [dates, setDates] = useState<DateSettings>(DEFAULT_DATES);
   const [nights, setNights] = useState<DayOfWeek[]>(DEFAULT_NIGHTS);
+  const [sortBy, setSortBy] = useState<SortBy>("date");
   const [settingsReady, setSettingsReady] = useState(false);
   const previousHits = useRef<Set<string>>(new Set());
   const abortRef = useRef<AbortController | null>(null);
@@ -269,6 +287,7 @@ export function Dashboard() {
   const partyRef = useRef(party);
   const datesRef = useRef(dates);
   const nightsRef = useRef(nights);
+  const sortByRef = useRef(sortBy);
   const skipSettingsReload = useRef(true);
   /** Party signature used for the results currently on screen */
   const resultsPartyKey = useRef(`${party.partySize}:${party.tents}`);
@@ -293,6 +312,10 @@ export function Dashboard() {
   useEffect(() => {
     nightsRef.current = nights;
   }, [nights]);
+
+  useEffect(() => {
+    sortByRef.current = sortBy;
+  }, [sortBy]);
 
   const load = useCallback(async (parksOverride?: Set<string>) => {
     const parksToCheck = parksOverride ?? selectedParksRef.current;
@@ -394,12 +417,15 @@ export function Dashboard() {
           } else if (event.type === "result") {
             setProgress({ index: event.index, total: event.total });
             setWeekends((current) =>
-              sortWeekends([
-                ...current.filter(
-                  (item) => resultKey(item) !== resultKey(event.result),
-                ),
-                event.result,
-              ]),
+              sortWeekends(
+                [
+                  ...current.filter(
+                    (item) => resultKey(item) !== resultKey(event.result),
+                  ),
+                  event.result,
+                ],
+                sortByRef.current,
+              ),
             );
 
             if (event.result.hasFullWeekend) {
@@ -428,7 +454,7 @@ export function Dashboard() {
               totalChecks:
                 event.report.weekends.length + event.report.errors.length,
             });
-            setWeekends(event.report.weekends);
+            setWeekends(sortWeekends(event.report.weekends, sortByRef.current));
             resultsPartyKey.current = `${partyRef.current.partySize}:${partyRef.current.tents}`;
             setErrors(event.report.errors);
             setProgress({
@@ -510,6 +536,10 @@ export function Dashboard() {
         if (typeof saved?.autoRefresh === "boolean") {
           setAutoRefresh(saved.autoRefresh);
         }
+        if (isSortBy(saved?.sortBy)) {
+          setSortBy(saved.sortBy);
+          sortByRef.current = saved.sortBy;
+        }
 
         setConfig(data);
         setSelectedParks(parks);
@@ -555,8 +585,9 @@ export function Dashboard() {
       dates,
       nights,
       autoRefresh,
+      sortBy,
     });
-  }, [settingsReady, selectedParks, party, dates, nights, autoRefresh]);
+  }, [settingsReady, selectedParks, party, dates, nights, autoRefresh, sortBy]);
 
   useEffect(() => {
     if (!autoRefresh || !config) return;
@@ -675,7 +706,14 @@ export function Dashboard() {
     });
   };
 
-  const fullHits = weekends.filter((w) => w.hasFullWeekend);
+  const fullHits = useMemo(
+    () =>
+      sortWeekends(
+        weekends.filter((w) => w.hasFullWeekend),
+        sortBy,
+      ),
+    [weekends, sortBy],
+  );
   const progressLabel =
     isChecking && progress.total > 0
       ? `${progress.index}/${progress.total}`
@@ -839,7 +877,12 @@ export function Dashboard() {
                       aria-pressed={selected}
                       onClick={() => togglePark(park.shortName)}
                     >
-                      {park.shortName}
+                      <span className="park-chip-name">{park.shortName}</span>
+                      {park.driveMinutesFromHome != null ? (
+                        <span className="park-drive">
+                          {park.driveMinutesFromHome} min
+                        </span>
+                      ) : null}
                     </button>
                   );
                 })}
@@ -869,12 +912,34 @@ export function Dashboard() {
       {error ? <div className="banner error">{error}</div> : null}
 
       <section className={`section ${fullHits.length > 0 ? "highlight" : ""}`}>
-        <h2>
-          Openings
+        <div className="section-head">
+          <h2>
+            Openings
+            {fullHits.length > 0 ? (
+              <span className="count">{fullHits.length}</span>
+            ) : null}
+          </h2>
           {fullHits.length > 0 ? (
-            <span className="count">{fullHits.length}</span>
+            <div className="sort-toggle" role="group" aria-label="Sort openings">
+              <button
+                type="button"
+                className={`text-toggle ${sortBy === "date" ? "on" : ""}`}
+                aria-pressed={sortBy === "date"}
+                onClick={() => setSortBy("date")}
+              >
+                By date
+              </button>
+              <button
+                type="button"
+                className={`text-toggle ${sortBy === "distance" ? "on" : ""}`}
+                aria-pressed={sortBy === "distance"}
+                onClick={() => setSortBy("distance")}
+              >
+                By distance
+              </button>
+            </div>
           ) : null}
-        </h2>
+        </div>
         {fullHits.length > 0 ? (
           <div className="result-list">
             {fullHits.map((weekend) => (
@@ -905,6 +970,7 @@ export function Dashboard() {
                           })),
                         };
                       }),
+                      sortByRef.current,
                     ),
                   );
                 }}

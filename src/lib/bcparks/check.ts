@@ -1,11 +1,14 @@
 import {
   getActiveParks,
   watcherConfig,
+  type ParkConfig,
   type WatcherConfig,
 } from "@/config/watcher.config";
 import {
   AVAILABILITY_OPEN,
   type AvailabilityReport,
+  type CheckEvent,
+  type CheckMeta,
   type NightAvailability,
   type WeekendResult,
 } from "./types";
@@ -14,7 +17,10 @@ import {
   dayName,
   formatDate,
   getWeekendWindowsInRange,
+  type WeekendWindow,
 } from "./weekends";
+
+export type { CheckEvent, CheckMeta };
 
 function resolveConfig(overrides?: Partial<WatcherConfig>): WatcherConfig {
   return {
@@ -26,92 +32,8 @@ function resolveConfig(overrides?: Partial<WatcherConfig>): WatcherConfig {
   };
 }
 
-export async function runAvailabilityCheck(
-  overrides?: Partial<WatcherConfig>,
-): Promise<AvailabilityReport> {
-  const config = resolveConfig(overrides);
-  const enabledParks = getActiveParks(config);
-  const windows = getWeekendWindowsInRange(
-    config.startDate,
-    config.endDate,
-    config.nights,
-  );
-  const weekends: WeekendResult[] = [];
-  const errors: string[] = [];
-
-  for (const park of enabledParks) {
-    for (const window of windows) {
-      const startDate = formatDate(window.arrival);
-      const endDateApi = formatDate(window.nights[window.nights.length - 1]);
-      const departureDate = formatDate(window.departure);
-
-      try {
-        const siteNights = await fetchParkDailyAvailability({
-          rootMapId: park.rootMapId,
-          resourceLocationId: park.resourceLocationId,
-          startDate,
-          endDate: endDateApi,
-          partySize: config.partySize,
-          equipmentCategoryId: config.equipmentCategoryId,
-          subEquipmentCategoryId: config.subEquipmentCategoryId,
-          numEquipment: config.numEquipment,
-          mapIds: park.mapIds,
-        });
-
-        const nightCounts = window.nights.map(() => 0);
-        let fullWeekendSites = 0;
-
-        for (const nights of Object.values(siteNights)) {
-          if (nights.length < window.nights.length) continue;
-
-          let allOpen = true;
-          for (let i = 0; i < window.nights.length; i++) {
-            if (nights[i] === AVAILABILITY_OPEN) {
-              nightCounts[i] += 1;
-            } else {
-              allOpen = false;
-            }
-          }
-          if (allOpen) fullWeekendSites += 1;
-        }
-
-        const nights: NightAvailability[] = window.nights.map((date, i) => ({
-          date: formatDate(date),
-          dayOfWeek: dayName(date),
-          availableSites: nightCounts[i],
-        }));
-
-        weekends.push({
-          parkName: park.name,
-          parkShortName: park.shortName,
-          resourceLocationId: park.resourceLocationId,
-          rootMapId: park.rootMapId,
-          driveMinutesFromHome: park.driveMinutesFromHome,
-          arrivalDate: startDate,
-          departureDate,
-          nights,
-          fullWeekendSites,
-          bookingUrl: buildBookingUrl({
-            mapId: park.rootMapId,
-            resourceLocationId: park.resourceLocationId,
-            startDate,
-            endDate: departureDate,
-            partySize: config.partySize,
-            equipmentCategoryId: config.equipmentCategoryId,
-            subEquipmentCategoryId: config.subEquipmentCategoryId,
-          }),
-          hasAnyAvailability: nightCounts.some((count) => count > 0),
-          hasFullWeekend: fullWeekendSites > 0,
-        });
-      } catch (error) {
-        const message =
-          error instanceof Error ? error.message : "Unknown park check error";
-        errors.push(`${park.shortName} ${startDate}: ${message}`);
-      }
-    }
-  }
-
-  weekends.sort((a, b) => {
+function sortWeekends(weekends: WeekendResult[]): WeekendResult[] {
+  return [...weekends].sort((a, b) => {
     if (a.arrivalDate !== b.arrivalDate) {
       return a.arrivalDate.localeCompare(b.arrivalDate);
     }
@@ -121,7 +43,13 @@ export async function runAvailabilityCheck(
     if (driveDiff !== 0) return driveDiff;
     return a.parkShortName.localeCompare(b.parkShortName);
   });
+}
 
+function buildMeta(
+  config: WatcherConfig,
+  enabledParks: ParkConfig[],
+  totalChecks: number,
+): CheckMeta {
   return {
     checkedAt: new Date().toISOString(),
     startDate: config.startDate,
@@ -139,9 +67,142 @@ export async function runAvailabilityCheck(
       shortName: park.shortName,
       driveMinutesFromHome: park.driveMinutesFromHome,
     })),
-    weekends,
+    totalChecks,
+  };
+}
+
+async function checkParkWindow(
+  config: WatcherConfig,
+  park: ParkConfig,
+  window: WeekendWindow,
+): Promise<WeekendResult> {
+  const startDate = formatDate(window.arrival);
+  const endDateApi = formatDate(window.nights[window.nights.length - 1]);
+  const departureDate = formatDate(window.departure);
+
+  const siteNights = await fetchParkDailyAvailability({
+    rootMapId: park.rootMapId,
+    resourceLocationId: park.resourceLocationId,
+    startDate,
+    endDate: endDateApi,
+    partySize: config.partySize,
+    equipmentCategoryId: config.equipmentCategoryId,
+    subEquipmentCategoryId: config.subEquipmentCategoryId,
+    numEquipment: config.numEquipment,
+    mapIds: park.mapIds,
+  });
+
+  const nightCounts = window.nights.map(() => 0);
+  let fullWeekendSites = 0;
+
+  for (const nights of Object.values(siteNights)) {
+    if (nights.length < window.nights.length) continue;
+
+    let allOpen = true;
+    for (let i = 0; i < window.nights.length; i++) {
+      if (nights[i] === AVAILABILITY_OPEN) {
+        nightCounts[i] += 1;
+      } else {
+        allOpen = false;
+      }
+    }
+    if (allOpen) fullWeekendSites += 1;
+  }
+
+  const nights: NightAvailability[] = window.nights.map((date, i) => ({
+    date: formatDate(date),
+    dayOfWeek: dayName(date),
+    availableSites: nightCounts[i],
+  }));
+
+  return {
+    parkName: park.name,
+    parkShortName: park.shortName,
+    resourceLocationId: park.resourceLocationId,
+    rootMapId: park.rootMapId,
+    driveMinutesFromHome: park.driveMinutesFromHome,
+    arrivalDate: startDate,
+    departureDate,
+    nights,
+    fullWeekendSites,
+    bookingUrl: buildBookingUrl({
+      mapId: park.rootMapId,
+      resourceLocationId: park.resourceLocationId,
+      startDate,
+      endDate: departureDate,
+      partySize: config.partySize,
+      equipmentCategoryId: config.equipmentCategoryId,
+      subEquipmentCategoryId: config.subEquipmentCategoryId,
+    }),
+    hasAnyAvailability: nightCounts.some((count) => count > 0),
+    hasFullWeekend: fullWeekendSites > 0,
+  };
+}
+
+/**
+ * Yields availability results one park/weekend at a time for progressive UI.
+ */
+export async function* streamAvailabilityCheck(
+  overrides?: Partial<WatcherConfig>,
+): AsyncGenerator<CheckEvent> {
+  const config = resolveConfig(overrides);
+  const enabledParks = getActiveParks(config);
+  const windows = getWeekendWindowsInRange(
+    config.startDate,
+    config.endDate,
+    config.nights,
+  );
+  const total = enabledParks.length * windows.length;
+  const weekends: WeekendResult[] = [];
+  const errors: string[] = [];
+  const meta = buildMeta(config, enabledParks, total);
+
+  yield { type: "meta", meta };
+
+  let index = 0;
+  for (const park of enabledParks) {
+    for (const window of windows) {
+      index += 1;
+      const startDate = formatDate(window.arrival);
+      try {
+        const result = await checkParkWindow(config, park, window);
+        weekends.push(result);
+        yield { type: "result", index, total, result };
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : "Unknown park check error";
+        const labeled = `${park.shortName} ${startDate}: ${message}`;
+        errors.push(labeled);
+        yield { type: "error", index, total, error: labeled };
+      }
+    }
+  }
+
+  const report: AvailabilityReport = {
+    ...meta,
+    weekends: sortWeekends(weekends),
     errors,
   };
+
+  yield { type: "done", report };
+}
+
+export async function runAvailabilityCheck(
+  overrides?: Partial<WatcherConfig>,
+): Promise<AvailabilityReport> {
+  let report: AvailabilityReport | null = null;
+
+  for await (const event of streamAvailabilityCheck(overrides)) {
+    if (event.type === "done") {
+      report = event.report;
+    }
+  }
+
+  if (!report) {
+    throw new Error("Availability check produced no report");
+  }
+
+  return report;
 }
 
 export async function notifyIfAvailable(

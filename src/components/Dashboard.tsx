@@ -1,7 +1,12 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState, useTransition } from "react";
-import type { AvailabilityReport, WeekendResult } from "@/lib/bcparks/types";
+import { useCallback, useEffect, useRef, useState } from "react";
+import type {
+  AvailabilityReport,
+  CheckEvent,
+  CheckMeta,
+  WeekendResult,
+} from "@/lib/bcparks/types";
 
 type PublicConfig = {
   homeBase?: string;
@@ -71,53 +76,146 @@ function formatStay(weekend: WeekendResult): string {
   return `${startLabel} → ${endLabel}`;
 }
 
+function resultKey(weekend: WeekendResult): string {
+  return `${weekend.parkShortName}:${weekend.arrivalDate}:${weekend.departureDate}`;
+}
+
+function sortWeekends(weekends: WeekendResult[]): WeekendResult[] {
+  return [...weekends].sort((a, b) => {
+    if (a.arrivalDate !== b.arrivalDate) {
+      return a.arrivalDate.localeCompare(b.arrivalDate);
+    }
+    const driveDiff =
+      (a.driveMinutesFromHome ?? Number.MAX_SAFE_INTEGER) -
+      (b.driveMinutesFromHome ?? Number.MAX_SAFE_INTEGER);
+    if (driveDiff !== 0) return driveDiff;
+    return a.parkShortName.localeCompare(b.parkShortName);
+  });
+}
+
 export function Dashboard() {
   const [config, setConfig] = useState<PublicConfig | null>(null);
-  const [report, setReport] = useState<AvailabilityReport | null>(null);
+  const [meta, setMeta] = useState<CheckMeta | null>(null);
+  const [weekends, setWeekends] = useState<WeekendResult[]>([]);
+  const [errors, setErrors] = useState<string[]>([]);
+  const [progress, setProgress] = useState({ index: 0, total: 0 });
+  const [isChecking, setIsChecking] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [isPending, startTransition] = useTransition();
   const [autoRefresh, setAutoRefresh] = useState(true);
   const previousHits = useRef<Set<string>>(new Set());
+  const abortRef = useRef<AbortController | null>(null);
 
   const load = useCallback(async () => {
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
+
     setError(null);
+    setIsChecking(true);
+    setWeekends([]);
+    setErrors([]);
+    setProgress({ index: 0, total: 0 });
+
     try {
-      const response = await fetch("/api/availability", { cache: "no-store" });
-      if (!response.ok) {
-        const body = (await response.json().catch(() => null)) as {
-          error?: string;
-        } | null;
-        throw new Error(body?.error || `Request failed (${response.status})`);
-      }
-      const next = (await response.json()) as AvailabilityReport;
-
-      const hitKeys = next.weekends
-        .filter((weekend) => weekend.hasFullWeekend)
-        .map(
-          (weekend) =>
-            `${weekend.parkShortName}:${weekend.arrivalDate}:${weekend.departureDate}`,
-        );
-
-      const isNewHit = hitKeys.some((key) => !previousHits.current.has(key));
-      previousHits.current = new Set(hitKeys);
-
-      if (
-        isNewHit &&
-        hitKeys.length > 0 &&
-        typeof window !== "undefined" &&
-        "Notification" in window &&
-        Notification.permission === "granted"
-      ) {
-        new Notification("BC Parks weekend open", {
-          body: `${hitKeys.length} full weekend(s) available — open the watcher to book.`,
-        });
-      }
-
-      startTransition(() => {
-        setReport(next);
+      const response = await fetch("/api/availability/stream", {
+        cache: "no-store",
+        signal: controller.signal,
       });
+
+      if (!response.ok || !response.body) {
+        throw new Error(`Request failed (${response.status})`);
+      }
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let finalReport: AvailabilityReport | null = null;
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const chunks = buffer.split("\n\n");
+        buffer = chunks.pop() ?? "";
+
+        for (const chunk of chunks) {
+          const line = chunk
+            .split("\n")
+            .find((entry) => entry.startsWith("data: "));
+          if (!line) continue;
+
+          const event = JSON.parse(line.slice(6)) as CheckEvent;
+
+          if (event.type === "meta") {
+            setMeta(event.meta);
+            setProgress({ index: 0, total: event.meta.totalChecks });
+          } else if (event.type === "result") {
+            setProgress({ index: event.index, total: event.total });
+            setWeekends((current) =>
+              sortWeekends([
+                ...current.filter((item) => resultKey(item) !== resultKey(event.result)),
+                event.result,
+              ]),
+            );
+
+            if (
+              event.result.hasFullWeekend &&
+              typeof window !== "undefined" &&
+              "Notification" in window &&
+              Notification.permission === "granted"
+            ) {
+              const key = resultKey(event.result);
+              if (!previousHits.current.has(key)) {
+                previousHits.current.add(key);
+                new Notification("BC Parks weekend open", {
+                  body: `${event.result.parkShortName}: ${event.result.arrivalDate} → ${event.result.departureDate}`,
+                });
+              }
+            }
+          } else if (event.type === "error") {
+            setProgress({ index: event.index, total: event.total });
+            setErrors((current) => [...current, event.error]);
+          } else if (event.type === "done") {
+            finalReport = event.report;
+            setMeta({
+              checkedAt: event.report.checkedAt,
+              startDate: event.report.startDate,
+              endDate: event.report.endDate,
+              endDateLabel: event.report.endDateLabel,
+              nightLabels: event.report.nightLabels,
+              pollIntervalMinutes: event.report.pollIntervalMinutes,
+              homeBase: event.report.homeBase,
+              maxDriveMinutesFromHome: event.report.maxDriveMinutesFromHome,
+              party: event.report.party,
+              parksChecked: event.report.parksChecked,
+              totalChecks: event.report.weekends.length + event.report.errors.length,
+            });
+            setWeekends(event.report.weekends);
+            setErrors(event.report.errors);
+            setProgress({
+              index: event.report.weekends.length + event.report.errors.length,
+              total: event.report.weekends.length + event.report.errors.length,
+            });
+
+            const hitKeys = event.report.weekends
+              .filter((weekend) => weekend.hasFullWeekend)
+              .map(resultKey);
+            previousHits.current = new Set(hitKeys);
+          }
+        }
+      }
+
+      void finalReport;
     } catch (err) {
+      if (err instanceof DOMException && err.name === "AbortError") {
+        return;
+      }
       setError(err instanceof Error ? err.message : "Failed to load");
+    } finally {
+      if (abortRef.current === controller) {
+        setIsChecking(false);
+      }
     }
   }, []);
 
@@ -140,6 +238,7 @@ export function Dashboard() {
     return () => {
       cancelled = true;
       window.clearTimeout(timer);
+      abortRef.current?.abort();
     };
   }, [load]);
 
@@ -157,13 +256,15 @@ export function Dashboard() {
     await Notification.requestPermission();
   };
 
-  const fullHits = report?.weekends.filter((w) => w.hasFullWeekend) ?? [];
-  const partialHits =
-    report?.weekends.filter(
-      (w) => w.hasAnyAvailability && !w.hasFullWeekend,
-    ) ?? [];
-  const empty =
-    report?.weekends.filter((w) => !w.hasAnyAvailability) ?? [];
+  const fullHits = weekends.filter((w) => w.hasFullWeekend);
+  const partialHits = weekends.filter(
+    (w) => w.hasAnyAvailability && !w.hasFullWeekend,
+  );
+  const empty = weekends.filter((w) => !w.hasAnyAvailability);
+  const progressLabel =
+    isChecking && progress.total > 0
+      ? `Checking ${progress.index}/${progress.total}`
+      : null;
 
   return (
     <div className="page-shell">
@@ -189,9 +290,9 @@ export function Dashboard() {
             type="button"
             className="btn primary"
             onClick={() => void load()}
-            disabled={isPending}
+            disabled={isChecking}
           >
-            {isPending || !report ? "Checking…" : "Check now"}
+            {isChecking ? progressLabel || "Checking…" : "Check now"}
           </button>
           <button
             type="button"
@@ -210,15 +311,31 @@ export function Dashboard() {
         </div>
 
         <p className="meta">
-          {report
-            ? `Last check ${formatCheckedAt(report.checkedAt)} · every ${report.pollIntervalMinutes} min`
-            : "Waiting for first check…"}
+          {isChecking
+            ? `${progressLabel} · results appear as each park finishes`
+            : meta
+              ? `Last check ${formatCheckedAt(meta.checkedAt)} · every ${meta.pollIntervalMinutes} min`
+              : "Waiting for first check…"}
           {config?.party
             ? ` · ${config.party.adults} adults, kids ${config.party.kidsAges.join(" & ")}, ${config.party.tents} tent, ${config.party.cars} car`
             : config
               ? ` · party of ${config.partySize}`
               : null}
         </p>
+
+        {isChecking && progress.total > 0 ? (
+          <div
+            className="progress-track"
+            aria-label={`Progress ${progress.index} of ${progress.total}`}
+          >
+            <div
+              className="progress-fill"
+              style={{
+                width: `${Math.min(100, (progress.index / progress.total) * 100)}%`,
+              }}
+            />
+          </div>
+        ) : null}
 
         {config?.parks?.length ? (
           <ul className="park-chips">
@@ -244,7 +361,11 @@ export function Dashboard() {
           </p>
           <div className="result-list">
             {fullHits.map((weekend) => (
-              <WeekendRow key={`${weekend.parkShortName}-${weekend.arrivalDate}`} weekend={weekend} featured />
+              <WeekendRow
+                key={resultKey(weekend)}
+                weekend={weekend}
+                featured
+              />
             ))}
           </div>
         </section>
@@ -261,10 +382,7 @@ export function Dashboard() {
           </p>
           <div className="result-list">
             {partialHits.map((weekend) => (
-              <WeekendRow
-                key={`${weekend.parkShortName}-${weekend.arrivalDate}`}
-                weekend={weekend}
-              />
+              <WeekendRow key={resultKey(weekend)} weekend={weekend} />
             ))}
           </div>
         </section>
@@ -273,32 +391,37 @@ export function Dashboard() {
       <section className="section">
         <h2>All scanned weekends</h2>
         <p className="section-copy">
-          {report
-            ? `${report.weekends.length} park/weekend combinations checked.`
-            : "Loading live availability from camping.bcparks.ca…"}
+          {weekends.length > 0
+            ? `${weekends.length}${
+                isChecking && progress.total > 0
+                  ? ` of ${progress.total}`
+                  : ""
+              } park/weekend combinations checked.`
+            : isChecking
+              ? "Streaming live availability from camping.bcparks.ca…"
+              : "No results yet."}
         </p>
-        {report ? (
+        {weekends.length > 0 ? (
           <div className="result-list muted">
-            {(fullHits.length + partialHits.length > 0
-              ? empty
-              : report.weekends
-            ).map((weekend) => (
-              <WeekendRow
-                key={`${weekend.parkShortName}-${weekend.arrivalDate}-all`}
-                weekend={weekend}
-              />
-            ))}
+            {(fullHits.length + partialHits.length > 0 ? empty : weekends).map(
+              (weekend) => (
+                <WeekendRow
+                  key={`${resultKey(weekend)}-all`}
+                  weekend={weekend}
+                />
+              ),
+            )}
           </div>
-        ) : (
+        ) : isChecking ? (
           <div className="skeleton" />
-        )}
+        ) : null}
       </section>
 
-      {report?.errors?.length ? (
+      {errors.length > 0 ? (
         <section className="section">
           <h2>Check errors</h2>
           <ul className="error-list">
-            {report.errors.map((item) => (
+            {errors.map((item) => (
               <li key={item}>{item}</li>
             ))}
           </ul>

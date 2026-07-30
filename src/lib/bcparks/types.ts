@@ -73,3 +73,37 @@ export type AvailabilityReport = {
   weekends: WeekendResult[];
   errors: string[];
 };
+
+export type CheckMeta = {
+  checkedAt: string;
+  startDate: string;
+  endDate: string;
+  endDateLabel?: string;
+  nightLabels: string[];
+  pollIntervalMinutes: number;
+  homeBase?: string;
+  maxDriveMinutesFromHome?: number;
+  party?: {
+    adults: number;
+    kidsAges: number[];
+    tents: number;
+    cars: number;
+    partySize: number;
+  };
+  parksChecked: Array<{
+    shortName: string;
+    driveMinutesFromHome?: number;
+  }>;
+  totalChecks: number;
+};
+
+export type CheckEvent =
+  | { type: "meta"; meta: CheckMeta }
+  | {
+      type: "result";
+      index: number;
+      total: number;
+      result: WeekendResult;
+    }
+  | { type: "error"; index: number; total: number; error: string }
+  | { type: "done"; report: AvailabilityReport };

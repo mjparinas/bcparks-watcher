@@ -153,6 +153,21 @@ code {
   font-weight: 600;
 }
 
+.progress-track {
+  margin-top: 0.85rem;
+  height: 0.45rem;
+  border-radius: 999px;
+  background: rgba(28, 42, 34, 0.08);
+  overflow: hidden;
+}
+
+.progress-fill {
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--moss), var(--lake));
+  transition: width 220ms ease;
+}
+
 .banner {
   padding: 0.9rem 1rem;
   border-radius: 0.85rem;

@@ -67,7 +67,8 @@ Date range is `startDate` → `endDate` (exclusive). Stays must arrive on/after 
 
 | Route | Purpose |
 | --- | --- |
-| `GET /api/availability` | Run a live check and return the full report |
+| `GET /api/availability` | Run a full check and return JSON |
+| `GET /api/availability/stream` | SSE stream — emits each park/weekend as it finishes |
 | `GET /api/cron` | Same check for schedulers / Vercel Cron |
 | `GET /api/parks?q=` | Search park IDs by name |
 | `GET /api/config` | Public view of the active config |

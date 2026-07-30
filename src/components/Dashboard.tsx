@@ -105,6 +105,7 @@ export function Dashboard() {
   const [notifyPermission, setNotifyPermission] = useState<
     NotificationPermission | "unsupported"
   >("default");
+  const [selectedParks, setSelectedParks] = useState<Set<string>>(new Set());
   const previousHits = useRef<Set<string>>(new Set());
   const abortRef = useRef<AbortController | null>(null);
 
@@ -228,7 +229,9 @@ export function Dashboard() {
     fetch("/api/config")
       .then((response) => response.json())
       .then((data: PublicConfig) => {
-        if (!cancelled) setConfig(data);
+        if (cancelled) return;
+        setConfig(data);
+        setSelectedParks(new Set(data.parks.map((park) => park.shortName)));
       })
       .catch(() => {
         if (!cancelled) setConfig(null);
@@ -273,7 +276,18 @@ export function Dashboard() {
     setNotifyPermission(permission);
   };
 
-  const fullHits = weekends.filter((w) => w.hasFullWeekend);
+  const togglePark = (shortName: string) => {
+    setSelectedParks((current) => {
+      const next = new Set(current);
+      if (next.has(shortName)) next.delete(shortName);
+      else next.add(shortName);
+      return next;
+    });
+  };
+
+  const fullHits = weekends.filter(
+    (w) => w.hasFullWeekend && selectedParks.has(w.parkShortName),
+  );
   const progressLabel =
     isChecking && progress.total > 0
       ? `Checking ${progress.index}/${progress.total}`
@@ -362,16 +376,25 @@ export function Dashboard() {
         ) : null}
 
         {config?.parks?.length ? (
-          <ul className="park-chips">
-            {config.parks.map((park) => (
-              <li key={park.shortName}>
-                {park.shortName}
-                {park.driveMinutesFromHome != null
-                  ? ` · ${park.driveMinutesFromHome}m`
-                  : ""}
-              </li>
-            ))}
-          </ul>
+          <div className="park-chips" role="group" aria-label="Parks to show">
+            {config.parks.map((park) => {
+              const selected = selectedParks.has(park.shortName);
+              return (
+                <button
+                  key={park.shortName}
+                  type="button"
+                  className={`park-chip ${selected ? "selected" : ""}`}
+                  aria-pressed={selected}
+                  onClick={() => togglePark(park.shortName)}
+                >
+                  {park.shortName}
+                  {park.driveMinutesFromHome != null
+                    ? ` · ${park.driveMinutesFromHome}m`
+                    : ""}
+                </button>
+              );
+            })}
+          </div>
         ) : null}
       </header>
 

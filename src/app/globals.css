@@ -138,18 +138,43 @@ code {
   display: flex;
   flex-wrap: wrap;
   gap: 0.45rem;
-  list-style: none;
   margin: 1rem 0 0;
   padding: 0;
 }
 
-.park-chips li {
-  padding: 0.35rem 0.7rem;
+.park-chip {
+  appearance: none;
+  margin: 0;
+  padding: 0.4rem 0.8rem;
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.55);
-  border: 1px solid var(--line);
-  color: var(--ink-soft);
+  border: 1px solid rgba(31, 74, 55, 0.35);
+  background: var(--moss-deep);
+  color: #f5fbf7;
+  font: inherit;
   font-size: 0.82rem;
+  font-weight: 650;
+  cursor: pointer;
+  transition:
+    background 160ms ease,
+    color 160ms ease,
+    border-color 160ms ease,
+    transform 160ms ease;
+}
+
+.park-chip:hover {
+  transform: translateY(-1px);
+}
+
+.park-chip.selected {
+  background: var(--moss-deep);
+  border-color: rgba(31, 74, 55, 0.45);
+  color: #f5fbf7;
+}
+
+.park-chip:not(.selected) {
+  background: rgba(255, 255, 255, 0.55);
+  border-color: var(--line);
+  color: var(--ink-soft);
   font-weight: 600;
 }
 

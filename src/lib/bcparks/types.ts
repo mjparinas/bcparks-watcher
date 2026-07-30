@@ -41,6 +41,8 @@ export type NightAvailability = {
 export type OpenSite = {
   resourceId: string;
   mapId: number;
+  /** Campsite label from BC Parks (e.g. "B59", "D7") */
+  name?: string;
 };
 
 export type WeekendResult = {

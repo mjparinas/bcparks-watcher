@@ -20,6 +20,7 @@ import {
 import {
   buildBookingUrl,
   fetchParkAvailability,
+  fetchResourceNames,
   isOnlineReservableStay,
 } from "./client";
 import {
@@ -153,8 +154,22 @@ async function checkParkWindow(
     )
   ).filter((site): site is OpenSite => site != null);
 
-  const fullWeekendSites = verified.length;
-  const first = verified[0];
+  let named = verified;
+  if (verified.length > 0) {
+    try {
+      const names = await fetchResourceNames(park.resourceLocationId);
+      named = verified.map((site) => ({
+        ...site,
+        name: names[site.resourceId] ?? site.name,
+      }));
+    } catch {
+      // Labels are nice-to-have; keep numeric IDs if the name lookup fails
+      named = verified;
+    }
+  }
+
+  const fullWeekendSites = named.length;
+  const first = named[0];
 
   const nights: NightAvailability[] = window.nights.map((date) => ({
     date: formatDate(date),
@@ -172,7 +187,7 @@ async function checkParkWindow(
     departureDate,
     nights,
     fullWeekendSites,
-    openSites: verified,
+    openSites: named,
     sitesCapped,
     bookingUrl: buildBookingUrl({
       mapId: first?.mapId ?? park.rootMapId,
@@ -339,7 +354,7 @@ export async function notifyIfAvailable(
   const text = hits
     .map((hit) => {
       const sites = hit.openSites
-        .map((site) => site.resourceId)
+        .map((site) => site.name ?? site.resourceId)
         .slice(0, 5)
         .join(", ");
       return `🏕️ ${hit.parkShortName}: ${hit.arrivalDate} → ${hit.departureDate} — ${hit.fullWeekendSites} site(s)${sites ? ` [${sites}]` : ""}\n${hit.bookingUrl}`;

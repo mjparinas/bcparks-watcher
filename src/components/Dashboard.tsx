@@ -236,7 +236,7 @@ function announceOpening(weekend: WeekendResult): void {
   }
   const sites = (weekend.openSites ?? [])
     .slice(0, 3)
-    .map((site) => site.resourceId)
+    .map((site) => site.name ?? formatSiteId(site.resourceId))
     .join(", ");
   new Notification("BC Parks site open", {
     body: `${weekend.parkShortName}: ${weekend.arrivalDate} → ${weekend.departureDate} · ${weekend.fullWeekendSites} site(s)${sites ? ` · ${sites}` : ""}`,
@@ -973,6 +973,10 @@ function formatSiteId(resourceId: string): string {
   return resourceId.startsWith("-") ? resourceId.slice(1) : resourceId;
 }
 
+function siteLabel(site: { resourceId: string; name?: string }): string {
+  return site.name?.trim() || formatSiteId(site.resourceId);
+}
+
 function bookingUrlForSite(base: string, resourceId: string): string {
   try {
     const url = new URL(base);
@@ -1002,7 +1006,7 @@ function WeekendRow({ weekend }: { weekend: WeekendResult }) {
           </span>
         </div>
         {sites.length > 0 ? (
-          <div className="site-ids" aria-label="Open site IDs">
+          <div className="site-ids" aria-label="Open campsites">
             {sites.map((site) => (
               <a
                 key={site.resourceId}
@@ -1010,9 +1014,9 @@ function WeekendRow({ weekend }: { weekend: WeekendResult }) {
                 href={bookingUrlForSite(weekend.bookingUrl, site.resourceId)}
                 target="_blank"
                 rel="noreferrer"
-                title={`Resource ${site.resourceId}`}
+                title={site.name ? `${site.name}` : `Site ${formatSiteId(site.resourceId)}`}
               >
-                {formatSiteId(site.resourceId)}
+                {siteLabel(site)}
               </a>
             ))}
             {weekend.sitesCapped ? (

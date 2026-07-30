@@ -321,3 +321,69 @@ export async function isOnlineReservableStay(options: {
     .slice(0, options.nightCount)
     .every((day) => day.processedAvailability === AVAILABILITY_OPEN);
 }
+
+type ResourceNamePayload = Record<
+  string,
+  {
+    resourceId?: number;
+    localizedValues?: Array<{
+      cultureName?: string;
+      name?: string;
+    }>;
+  }
+>;
+
+const resourceNameCache = new Map<number, CacheEntry>();
+const RESOURCE_NAME_TTL_MS = 6 * 60 * 60 * 1000;
+
+/**
+ * Campsite labels (B59, D7, …) keyed by resourceId for a park.
+ * Cached longer than availability — names rarely change.
+ */
+export async function fetchResourceNames(
+  resourceLocationId: number,
+): Promise<Record<string, string>> {
+  const hit = resourceNameCache.get(resourceLocationId);
+  if (hit && hit.expires > Date.now()) {
+    return hit.value as Record<string, string>;
+  }
+
+  const url = `${BCPARKS_BASE}/api/resourceLocation/resources?resourceLocationId=${resourceLocationId}`;
+  let lastError: Error | null = null;
+  let payload: ResourceNamePayload | null = null;
+
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
+    const response = await fetch(url, {
+      headers: DEFAULT_HEADERS,
+      cache: "no-store",
+    });
+
+    if (response.ok) {
+      payload = (await response.json()) as ResourceNamePayload;
+      break;
+    }
+
+    lastError = new Error(`BC Parks API ${response.status} for ${url}`);
+    if (!RETRYABLE_STATUS.has(response.status) || attempt === MAX_ATTEMPTS) {
+      throw lastError;
+    }
+    await sleep(400 * 2 ** (attempt - 1) + Math.floor(Math.random() * 200));
+  }
+
+  if (!payload) {
+    throw lastError ?? new Error(`BC Parks API failed for ${url}`);
+  }
+
+  const names: Record<string, string> = {};
+  for (const [id, resource] of Object.entries(payload)) {
+    const name = resource.localizedValues?.[0]?.name?.trim();
+    if (name) names[id] = name;
+  }
+
+  resourceNameCache.set(resourceLocationId, {
+    expires: Date.now() + RESOURCE_NAME_TTL_MS,
+    value: names,
+  });
+
+  return names;
+}

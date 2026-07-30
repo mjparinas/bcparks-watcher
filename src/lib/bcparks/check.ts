@@ -12,7 +12,11 @@ import {
   type NightAvailability,
   type WeekendResult,
 } from "./types";
-import { buildBookingUrl, fetchParkAvailability } from "./client";
+import {
+  buildBookingUrl,
+  fetchParkAvailability,
+  isOnlineReservableStay,
+} from "./client";
 import {
   dayName,
   formatDate,
@@ -72,10 +76,12 @@ function buildMeta(
 }
 
 /**
- * A "full weekend" means the SAME campsite is reservable for every night
- * in the stay — not different sites on different nights, and not sites that
- * only look open as a continuous stay while individual nights (or checkout
- * rules) block the Friday→Sunday trip.
+ * A "full weekend" means the SAME campsite is online-reservable for every
+ * night in the stay. We ignore:
+ * - different sites open on different nights
+ * - continuous-map false positives with a blocked night
+ * - FCFS / non-reservable sites (processedAvailability 3) like "B33 is not
+ *   reservable"
  */
 async function checkParkWindow(
   config: WatcherConfig,
@@ -104,25 +110,37 @@ async function checkParkWindow(
   ]);
 
   const nightCount = window.nights.length;
-  let fullWeekendSites = 0;
+  const candidates: string[] = [];
 
   for (const [resourceId, stayCodes] of Object.entries(continuous)) {
-    // Must be bookable as one continuous reservation on this site
     if (!stayCodes.some((code) => code === AVAILABILITY_OPEN)) continue;
 
     const nightCodes = daily[resourceId];
     if (!nightCodes || nightCodes.length < nightCount) continue;
 
-    // Every night in the stay must be open on THIS same site.
-    // Filters out departure/checkout-restricted sites that the continuous
-    // endpoint sometimes marks available even when a night is blocked.
     const everyNightOpen = nightCodes
       .slice(0, nightCount)
       .every((code) => code === AVAILABILITY_OPEN);
     if (!everyNightOpen) continue;
 
-    fullWeekendSites += 1;
+    candidates.push(resourceId);
   }
+
+  // Confirm with processedAvailability so FCFS / non-reservable pads drop out
+  const verified = await Promise.all(
+    candidates.map(async (resourceId) =>
+      (await isOnlineReservableStay({
+        resourceId,
+        startDate,
+        endDate: endDateApi,
+        nightCount,
+      }))
+        ? resourceId
+        : null,
+    ),
+  );
+
+  const fullWeekendSites = verified.filter(Boolean).length;
 
   const nights: NightAvailability[] = window.nights.map((date) => ({
     date: formatDate(date),

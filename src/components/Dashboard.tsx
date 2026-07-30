@@ -381,10 +381,10 @@ export function Dashboard() {
         <h2>Bookable weekends</h2>
         <p className="section-copy">
           {fullHits.length > 0
-            ? "Same campsite open Friday and Saturday with no blocked checkout night — book quickly."
+            ? "Same campsite online-reservable Friday and Saturday — book quickly."
             : isChecking
-              ? "Still scanning… same-site Fri+Sat openings (without departure-day restrictions) will show here."
-              : `No unrestricted same-site Fri+Sat openings across ${weekends.length || "checked"} park/weekend combos.`}
+              ? "Still scanning… online-reservable Fri+Sat openings will show here."
+              : `No online-reservable Fri+Sat openings across ${weekends.length || "checked"} park/weekend combos.`}
         </p>
         {fullHits.length > 0 ? (
           <div className="result-list">

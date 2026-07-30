@@ -1,4 +1,9 @@
-import { BCPARKS_BASE, type MapAvailabilityResponse, type ResourceLocation } from "./types";
+import {
+  AVAILABILITY_OPEN,
+  BCPARKS_BASE,
+  type MapAvailabilityResponse,
+  type ResourceLocation,
+} from "./types";
 
 const DEFAULT_HEADERS = {
   "User-Agent":
@@ -196,4 +201,53 @@ export function buildBookingUrl(options: {
   });
 
   return `${BCPARKS_BASE}/create-booking/results?${params.toString()}`;
+}
+
+export type ProcessedDay = {
+  availability: number;
+  processedAvailability: number;
+  remainingQuota: number | null;
+};
+
+/**
+ * Per-night status for one campsite. `processedAvailability` is what the
+ * booking UI uses — 0 is online-reservable, 3 is typically FCFS / not reservable.
+ */
+export async function fetchResourceProcessedAvailability(options: {
+  resourceId: string | number;
+  startDate: string;
+  endDate: string;
+}): Promise<ProcessedDay[]> {
+  const params = new URLSearchParams({
+    resourceId: String(options.resourceId),
+    bookingCategoryId: "0",
+    startDate: options.startDate,
+    endDate: options.endDate,
+    isReserving: "true",
+  });
+
+  return getJson<ProcessedDay[]>(
+    `${BCPARKS_BASE}/api/availability/resourcedailyavailability?${params}`,
+  );
+}
+
+/** True when every night in the stay is online-reservable on this site. */
+export async function isOnlineReservableStay(options: {
+  resourceId: string | number;
+  startDate: string;
+  /** Inclusive last night of the stay */
+  endDate: string;
+  nightCount: number;
+}): Promise<boolean> {
+  const days = await fetchResourceProcessedAvailability({
+    resourceId: options.resourceId,
+    startDate: options.startDate,
+    endDate: options.endDate,
+  });
+
+  if (days.length < options.nightCount) return false;
+
+  return days
+    .slice(0, options.nightCount)
+    .every((day) => day.processedAvailability === AVAILABILITY_OPEN);
 }

@@ -1,6 +1,12 @@
 export const BCPARKS_BASE = "https://camping.bcparks.ca";
 
-/** GoingToCamp availability code 0 = reservable / open */
+/**
+ * GoingToCamp availability / processedAvailability codes we care about:
+ * 0 = online-reservable / open
+ * 1 = unavailable / booked
+ * 3 = not reservable online (often FCFS) — never treat as a hit
+ * 5 = unavailable in season / closed
+ */
 export const AVAILABILITY_OPEN = 0;
 
 export type DailyAvailability = {

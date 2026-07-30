@@ -37,8 +37,8 @@ export type CheckOverrides = Partial<WatcherConfig> & {
   dateOverrides?: DateOverrides;
 };
 
-/** How many park/weekend jobs to run at once */
-const PARK_WINDOW_CONCURRENCY = 4;
+/** How many park/weekend jobs to run at once (outbound calls are also paced). */
+const PARK_WINDOW_CONCURRENCY = 2;
 /** Max sites to confirm via processedAvailability per park/weekend */
 const MAX_VERIFY_SITES = 10;
 

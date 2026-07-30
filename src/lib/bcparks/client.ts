@@ -16,30 +16,141 @@ const DEFAULT_HEADERS: HeadersInit = {
 };
 
 const RETRYABLE_STATUS = new Set([403, 429, 502, 503, 504]);
-const MAX_ATTEMPTS = 4;
+const BLOCK_STATUS = new Set([403, 429]);
+const MAX_ATTEMPTS = 5;
+
+/**
+ * Soft ceiling for outbound BC Parks calls from this process.
+ * Undocumented edge limits + WAF mean bursts get 403/429; stay polite.
+ */
+const MAX_IN_FLIGHT = 2;
+const MIN_START_GAP_MS = 350;
+/** After repeated blocks, pause the whole process briefly. */
+const CIRCUIT_BLOCKS = 3;
+const CIRCUIT_COOLDOWN_MS = 60_000;
 
 /**
  * Availability changes minute-to-minute, so we never reuse BC Parks JSON
- * across searches. Concurrent callers for the same URL (parallel park jobs)
- * share one in-flight fetch instead — that avoids stampedes without serving
- * stale “still open” data on the next Search / auto-refresh.
+ * across searches. Concurrent callers for the same URL share one in-flight
+ * fetch — that avoids stampedes without serving stale data next Search.
  */
 const inflightGets = new Map<string, Promise<unknown>>();
 
+const paceState = {
+  inFlight: 0,
+  lastStartAt: 0,
+  queue: [] as Array<() => void>,
+  timer: null as ReturnType<typeof setTimeout> | null,
+  blockHits: 0,
+  cooldownUntil: 0,
+};
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function schedulePacePump(delayMs: number): void {
+  if (paceState.timer != null) return;
+  paceState.timer = setTimeout(() => {
+    paceState.timer = null;
+    pumpPaceGate();
+  }, delayMs);
+}
+
+function pumpPaceGate(): void {
+  while (
+    paceState.queue.length > 0 &&
+    paceState.inFlight < MAX_IN_FLIGHT
+  ) {
+    const now = Date.now();
+    const gapWait = paceState.lastStartAt + MIN_START_GAP_MS - now;
+    if (gapWait > 0) {
+      schedulePacePump(gapWait);
+      return;
+    }
+
+    const next = paceState.queue.shift();
+    if (!next) return;
+    paceState.inFlight += 1;
+    paceState.lastStartAt = Date.now();
+    next();
+  }
+}
+
+async function acquirePaceSlot(): Promise<void> {
+  const coolWait = paceState.cooldownUntil - Date.now();
+  if (coolWait > 0) {
+    await sleep(coolWait);
+  }
+
+  await new Promise<void>((resolve) => {
+    paceState.queue.push(resolve);
+    pumpPaceGate();
+  });
+}
+
+function releasePaceSlot(): void {
+  paceState.inFlight = Math.max(0, paceState.inFlight - 1);
+  pumpPaceGate();
+}
+
+function noteBlock(): void {
+  paceState.blockHits += 1;
+  if (paceState.blockHits >= CIRCUIT_BLOCKS) {
+    paceState.cooldownUntil = Date.now() + CIRCUIT_COOLDOWN_MS;
+    paceState.blockHits = 0;
+  }
+}
+
+function noteSuccess(): void {
+  paceState.blockHits = 0;
+}
+
+function retryDelayMs(
+  status: number,
+  attempt: number,
+  retryAfterHeader: string | null,
+): number {
+  if (retryAfterHeader) {
+    const asInt = Number(retryAfterHeader);
+    if (Number.isFinite(asInt) && asInt >= 0) {
+      return Math.min(60_000, asInt * 1000);
+    }
+    const asDate = Date.parse(retryAfterHeader);
+    if (!Number.isNaN(asDate)) {
+      return Math.min(60_000, Math.max(0, asDate - Date.now()));
+    }
+  }
+
+  if (BLOCK_STATUS.has(status)) {
+    // ~2s, 5s, 12s, 25s, 40s (+ jitter)
+    const base = Math.min(40_000, 1500 * 2 ** attempt);
+    return base + Math.floor(Math.random() * 500);
+  }
+
+  return 400 * 2 ** (attempt - 1) + Math.floor(Math.random() * 200);
+}
+
+async function pacedFetch(url: string): Promise<Response> {
+  await acquirePaceSlot();
+  try {
+    return await fetch(url, {
+      headers: DEFAULT_HEADERS,
+      cache: "no-store",
+    });
+  } finally {
+    releasePaceSlot();
+  }
 }
 
 async function fetchJsonWithRetry<T>(url: string): Promise<T> {
   let lastError: Error | null = null;
 
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
-    const response = await fetch(url, {
-      headers: DEFAULT_HEADERS,
-      cache: "no-store",
-    });
+    const response = await pacedFetch(url);
 
     if (response.ok) {
+      noteSuccess();
       return (await response.json()) as T;
     }
 
@@ -50,7 +161,17 @@ async function fetchJsonWithRetry<T>(url: string): Promise<T> {
       throw lastError;
     }
 
-    await sleep(400 * 2 ** (attempt - 1) + Math.floor(Math.random() * 200));
+    if (BLOCK_STATUS.has(response.status)) {
+      noteBlock();
+    }
+
+    await sleep(
+      retryDelayMs(
+        response.status,
+        attempt,
+        response.headers.get("retry-after"),
+      ),
+    );
   }
 
   throw lastError ?? new Error(`BC Parks API failed for ${url}`);
@@ -344,30 +465,7 @@ export async function fetchResourceNames(
   }
 
   const url = `${BCPARKS_BASE}/api/resourceLocation/resources?resourceLocationId=${resourceLocationId}`;
-  let lastError: Error | null = null;
-  let payload: ResourceNamePayload | null = null;
-
-  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
-    const response = await fetch(url, {
-      headers: DEFAULT_HEADERS,
-      cache: "no-store",
-    });
-
-    if (response.ok) {
-      payload = (await response.json()) as ResourceNamePayload;
-      break;
-    }
-
-    lastError = new Error(`BC Parks API ${response.status} for ${url}`);
-    if (!RETRYABLE_STATUS.has(response.status) || attempt === MAX_ATTEMPTS) {
-      throw lastError;
-    }
-    await sleep(400 * 2 ** (attempt - 1) + Math.floor(Math.random() * 200));
-  }
-
-  if (!payload) {
-    throw lastError ?? new Error(`BC Parks API failed for ${url}`);
-  }
+  const payload = await getJson<ResourceNamePayload>(url);
 
   const names: Record<string, string> = {};
   for (const [id, resource] of Object.entries(payload)) {

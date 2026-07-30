@@ -228,7 +228,7 @@ export const watcherConfig: WatcherConfig = {
   // Arrive Friday, stay Fri/Sat nights, leave Sunday
   nights: ["friday", "saturday"],
 
-  pollIntervalMinutes: 5,
+  pollIntervalMinutes: 10,
 
   party: {
     tents: 1,

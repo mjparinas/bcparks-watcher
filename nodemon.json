@@ -1,0 +1,8 @@
+{
+  "watch": ["src", "package.json", "next.config.ts", "next.config.js", "next.config.mjs"],
+  "ext": "ts,tsx,js,jsx,mjs,cjs,json,css",
+  "ignore": ["src/**/*.test.ts", ".next"],
+  "delay": 400,
+  "signal": "SIGTERM",
+  "exec": "next dev --port 3456"
+}

@@ -21,7 +21,7 @@ npm install
 npm run dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000). The dashboard auto-refreshes on the interval in config.
+Open [http://localhost:3456](http://localhost:3456). `npm run dev` uses nodemon, so the server fully restarts whenever files under `src/` change. The dashboard auto-refreshes on the interval in config.
 
 ## Adjust locations and times
 

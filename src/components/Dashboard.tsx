@@ -336,7 +336,7 @@ export function Dashboard() {
 
         <p className="meta">
           {isChecking
-            ? `${progressLabel} · full openings appear as they’re found`
+            ? `${progressLabel} · bookable stays appear as they’re found`
             : meta
               ? `Last check ${formatCheckedAt(meta.checkedAt)} · every ${meta.pollIntervalMinutes} min`
               : "Waiting for first check…"}
@@ -378,8 +378,8 @@ export function Dashboard() {
       {error ? <div className="banner error">{error}</div> : null}
 
       <section className={`section ${fullHits.length > 0 ? "highlight" : ""}`}>
-        <h2>Open full weekends</h2>
-          <p className="section-copy">
+        <h2>Bookable weekends</h2>
+        <p className="section-copy">
           {fullHits.length > 0
             ? "Same campsite open Friday and Saturday with no blocked checkout night — book quickly."
             : isChecking
@@ -445,9 +445,9 @@ function WeekendRow({
             </span>
           ))}
           <span
-            className={`night full ${weekend.hasFullWeekend ? "open" : "closed"}`}
+            className={`night sites ${weekend.hasFullWeekend ? "open" : "closed"}`}
           >
-            <em>Full</em>
+            <em>Sites</em>
             <strong>
               {weekend.hasFullWeekend ? weekend.fullWeekendSites : "—"}
             </strong>

@@ -37,6 +37,7 @@ export type WeekendResult = {
   parkShortName: string;
   resourceLocationId: number;
   rootMapId: number;
+  driveMinutesFromHome?: number;
   /** Arrival date (first night) */
   arrivalDate: string;
   /** Departure date (morning after last night) */
@@ -55,6 +56,12 @@ export type AvailabilityReport = {
   month: number;
   nightLabels: string[];
   pollIntervalMinutes: number;
+  homeBase?: string;
+  maxDriveMinutesFromHome?: number;
+  parksChecked: Array<{
+    shortName: string;
+    driveMinutesFromHome?: number;
+  }>;
   weekends: WeekendResult[];
   errors: string[];
 };

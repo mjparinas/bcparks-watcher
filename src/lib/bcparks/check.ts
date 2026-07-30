@@ -21,7 +21,19 @@ export async function runAvailabilityCheck(
   overrides?: Partial<WatcherConfig>,
 ): Promise<AvailabilityReport> {
   const config = resolveConfig(overrides);
-  const enabledParks = config.parks.filter((park) => park.enabled);
+  const maxDrive = config.maxDriveMinutesFromHome;
+  const enabledParks = config.parks
+    .filter((park) => park.enabled)
+    .filter((park) => {
+      if (maxDrive == null) return true;
+      if (park.driveMinutesFromHome == null) return true;
+      return park.driveMinutesFromHome <= maxDrive;
+    })
+    .sort(
+      (a, b) =>
+        (a.driveMinutesFromHome ?? Number.MAX_SAFE_INTEGER) -
+        (b.driveMinutesFromHome ?? Number.MAX_SAFE_INTEGER),
+    );
   const windows = getWeekendWindows(config.year, config.month, config.nights);
   const weekends: WeekendResult[] = [];
   const errors: string[] = [];
@@ -72,6 +84,7 @@ export async function runAvailabilityCheck(
           parkShortName: park.shortName,
           resourceLocationId: park.resourceLocationId,
           rootMapId: park.rootMapId,
+          driveMinutesFromHome: park.driveMinutesFromHome,
           arrivalDate: startDate,
           departureDate,
           nights,
@@ -100,6 +113,10 @@ export async function runAvailabilityCheck(
     if (a.arrivalDate !== b.arrivalDate) {
       return a.arrivalDate.localeCompare(b.arrivalDate);
     }
+    const driveDiff =
+      (a.driveMinutesFromHome ?? Number.MAX_SAFE_INTEGER) -
+      (b.driveMinutesFromHome ?? Number.MAX_SAFE_INTEGER);
+    if (driveDiff !== 0) return driveDiff;
     return a.parkShortName.localeCompare(b.parkShortName);
   });
 
@@ -109,6 +126,12 @@ export async function runAvailabilityCheck(
     month: config.month,
     nightLabels: config.nights,
     pollIntervalMinutes: config.pollIntervalMinutes,
+    homeBase: config.homeBase,
+    maxDriveMinutesFromHome: config.maxDriveMinutesFromHome,
+    parksChecked: enabledParks.map((park) => ({
+      shortName: park.shortName,
+      driveMinutesFromHome: park.driveMinutesFromHome,
+    })),
     weekends,
     errors,
   };

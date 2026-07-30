@@ -4,12 +4,18 @@ import { useCallback, useEffect, useRef, useState, useTransition } from "react";
 import type { AvailabilityReport, WeekendResult } from "@/lib/bcparks/types";
 
 type PublicConfig = {
+  homeBase?: string;
+  maxDriveMinutesFromHome?: number;
   year: number;
   month: number;
   nights: string[];
   pollIntervalMinutes: number;
   partySize: number;
-  parks: Array<{ name: string; shortName: string }>;
+  parks: Array<{
+    name: string;
+    shortName: string;
+    driveMinutesFromHome?: number;
+  }>;
 };
 
 function monthLabel(year: number, month: number): string {
@@ -149,10 +155,11 @@ export function Dashboard() {
             : "Weekend availability"}
         </h1>
         <p className="lede">
-          Watching{" "}
-          {config?.parks.map((park) => park.shortName).join(" & ") ||
-            "configured parks"}{" "}
-          for{" "}
+          Watching {config?.parks.length ?? "…"} parks within{" "}
+          {config?.maxDriveMinutesFromHome
+            ? `${Math.round(config.maxDriveMinutesFromHome / 60)} hours`
+            : "range"}{" "}
+          of {config?.homeBase || "home"} for{" "}
           {config?.nights.map((night) => night.slice(0, 3)).join("–") ||
             "Fri–Sun"}{" "}
           nights. Edit{" "}
@@ -190,6 +197,19 @@ export function Dashboard() {
             : "Waiting for first check…"}
           {config ? ` · party of ${config.partySize}` : null}
         </p>
+
+        {config?.parks?.length ? (
+          <ul className="park-chips">
+            {config.parks.map((park) => (
+              <li key={park.shortName}>
+                {park.shortName}
+                {park.driveMinutesFromHome != null
+                  ? ` · ${park.driveMinutesFromHome}m`
+                  : ""}
+              </li>
+            ))}
+          </ul>
+        ) : null}
       </header>
 
       {error ? <div className="banner error">{error}</div> : null}
@@ -278,6 +298,9 @@ function WeekendRow({
       <div className="result-main">
         <div className="result-title">
           <span className="park">{weekend.parkShortName}</span>
+          {weekend.driveMinutesFromHome != null ? (
+            <span className="drive">~{weekend.driveMinutesFromHome} min</span>
+          ) : null}
           <span className="stay">{formatStay(weekend)}</span>
         </div>
         <div className="nights">

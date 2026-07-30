@@ -134,6 +134,25 @@ code {
   font-size: 0.92rem;
 }
 
+.park-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  list-style: none;
+  margin: 1rem 0 0;
+  padding: 0;
+}
+
+.park-chips li {
+  padding: 0.35rem 0.7rem;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.55);
+  border: 1px solid var(--line);
+  color: var(--ink-soft);
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+
 .banner {
   padding: 0.9rem 1rem;
   border-radius: 0.85rem;
@@ -225,6 +244,12 @@ code {
 .stay {
   color: var(--ink-soft);
   font-size: 0.95rem;
+}
+
+.drive {
+  color: var(--lake);
+  font-size: 0.85rem;
+  font-weight: 650;
 }
 
 .nights {

@@ -2,11 +2,13 @@
 
 Next.js app that periodically checks [camping.bcparks.ca](https://camping.bcparks.ca) for weekend campsite availability.
 
-Default watch list:
+Default watch list (≤ ~3 hours from **Langley, BC**):
 
-- **E. C. Manning Provincial Park**
-- **Sasquatch Provincial Park**
-- **August 2026** Friday / Saturday / Sunday nights
+- Rolley Lake, Golden Ears, Cultus Lake
+- Porteau Cove, Sasquatch, Alice Lake
+- Silver Lake, Chilliwack Lake, Manning, Skagit Valley, Nairn Falls
+
+Drive times and the `maxDriveMinutesFromHome` cutoff live in config.
 
 ## Quick start
 
@@ -23,6 +25,8 @@ Edit one file: [`src/config/watcher.config.ts`](src/config/watcher.config.ts)
 
 ```ts
 export const watcherConfig = {
+  homeBase: "Langley, BC",
+  maxDriveMinutesFromHome: 180, // 3 hours
   year: 2026,
   month: 8, // August
   nights: ["friday", "saturday", "sunday"],
@@ -30,10 +34,11 @@ export const watcherConfig = {
   partySize: 2,
   parks: [
     {
-      name: "E. C. Manning Provincial Park",
-      shortName: "Manning",
-      resourceLocationId: -2147483618,
-      rootMapId: -2147483601,
+      name: "Cultus Lake Provincial Park",
+      shortName: "Cultus Lake",
+      resourceLocationId: -2147483623,
+      rootMapId: -2147483610,
+      driveMinutesFromHome: 60,
       enabled: true,
     },
     // add / disable parks here

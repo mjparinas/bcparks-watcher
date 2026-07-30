@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { notifyIfAvailable, runAvailabilityCheck } from "@/lib/bcparks/check";
 
 export const dynamic = "force-dynamic";
-export const maxDuration = 60;
+export const maxDuration = 120;
 
 /**
  * Periodic check endpoint for Vercel Cron / external schedulers.

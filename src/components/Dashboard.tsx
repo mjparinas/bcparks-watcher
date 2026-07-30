@@ -449,14 +449,6 @@ export function Dashboard() {
         </p>
 
         <div className="actions">
-          <button
-            type="button"
-            className="btn primary"
-            onClick={() => void load()}
-            disabled={isChecking}
-          >
-            {isChecking ? progressLabel || "Checking…" : "Check now"}
-          </button>
           {isChecking ? (
             <button
               type="button"
@@ -466,8 +458,17 @@ export function Dashboard() {
               onClick={() => abortRef.current?.abort()}
             >
               <span className="stop-icon" aria-hidden="true" />
+              {progressLabel || "Stop"}
             </button>
-          ) : null}
+          ) : (
+            <button
+              type="button"
+              className="btn primary"
+              onClick={() => void load()}
+            >
+              Check now
+            </button>
+          )}
           <button
             type="button"
             className={`btn ${autoRefresh ? "active" : ""}`}

@@ -129,12 +129,10 @@ code {
 }
 
 .btn.stop {
-  width: 2.75rem;
-  padding-left: 0;
-  padding-right: 0;
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  gap: 0.55rem;
   background: rgba(155, 59, 46, 0.1);
   border-color: rgba(155, 59, 46, 0.35);
   color: var(--danger);
@@ -151,6 +149,7 @@ code {
   height: 0.7rem;
   border-radius: 0.12rem;
   background: currentColor;
+  flex-shrink: 0;
 }
 
 .meta {

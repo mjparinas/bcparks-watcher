@@ -18,6 +18,22 @@ const DEFAULT_HEADERS: HeadersInit = {
 const RETRYABLE_STATUS = new Set([403, 429, 502, 503, 504]);
 const BLOCK_STATUS = new Set([403, 429]);
 const MAX_ATTEMPTS = 5;
+/** 403 from Azure Front Door rarely clears mid-request — don't burn the function budget. */
+const MAX_403_ATTEMPTS = 2;
+
+function isVercelRuntime(): boolean {
+  return process.env.VERCEL === "1" || Boolean(process.env.VERCEL_ENV);
+}
+
+function blockErrorMessage(status: number, url: string): string {
+  if (status === 403) {
+    const hostHint = isVercelRuntime()
+      ? " Vercel egress IPs are often blocked; run locally for searches."
+      : " Cloud/datacenter IPs are often blocked; residential egress usually works.";
+    return `BC Parks API 403 (WAF blocked) for ${url}.${hostHint}`;
+  }
+  return `BC Parks API ${status} for ${url}`;
+}
 
 /**
  * Soft ceiling for outbound BC Parks calls from this process.
@@ -156,14 +172,23 @@ async function fetchJsonWithRetry<T>(url: string): Promise<T> {
       return (await response.json()) as T;
     }
 
-    const message = `BC Parks API ${response.status} for ${url}`;
+    const message = blockErrorMessage(response.status, url);
     lastError = new Error(message);
 
-    if (!RETRYABLE_STATUS.has(response.status) || attempt === MAX_ATTEMPTS) {
+    // 403 from Azure Front Door rarely clears mid-request (especially on Vercel).
+    const attemptsForStatus =
+      response.status === 403 ? MAX_403_ATTEMPTS : MAX_ATTEMPTS;
+
+    if (
+      !RETRYABLE_STATUS.has(response.status) ||
+      attempt >= attemptsForStatus
+    ) {
       throw lastError;
     }
 
-    if (BLOCK_STATUS.has(response.status)) {
+    // 429 = back off the process. 403 = WAF IP block; circuit cooldown just burns
+    // Vercel’s maxDuration without recovering.
+    if (response.status === 429) {
       noteBlock();
     }
 

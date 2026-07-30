@@ -17,6 +17,9 @@ export async function GET() {
     driveMinutesFromHome: park.driveMinutesFromHome,
   }));
 
+  const onVercel =
+    process.env.VERCEL === "1" || Boolean(process.env.VERCEL_ENV);
+
   return NextResponse.json({
     homeBase: config.homeBase,
     maxDriveMinutesFromHome: config.maxDriveMinutesFromHome,
@@ -30,5 +33,10 @@ export async function GET() {
     partySize: config.partySize,
     tents: config.party.tents,
     parks,
+    /**
+     * BC Parks Azure Front Door often 403s Vercel/datacenter egress.
+     * Searches work from local/residential IPs; the hosted UI alone is not enough.
+     */
+    bcParksEgressBlocked: onVercel,
   });
 }

@@ -267,6 +267,49 @@ code {
   padding: 0;
 }
 
+.day-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin: 0.85rem 0 0;
+}
+
+.day-chip {
+  appearance: none;
+  margin: 0;
+  min-width: 2.7rem;
+  padding: 0.45rem 0.65rem;
+  border-radius: 0.7rem;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.55);
+  color: var(--ink-soft);
+  font: inherit;
+  font-size: 0.82rem;
+  font-weight: 650;
+  cursor: pointer;
+  transition:
+    background 160ms ease,
+    color 160ms ease,
+    border-color 160ms ease,
+    transform 160ms ease;
+}
+
+.day-chip:hover {
+  transform: translateY(-1px);
+}
+
+.day-chip.selected {
+  background: var(--moss-deep);
+  border-color: rgba(31, 74, 55, 0.45);
+  color: #f5fbf7;
+}
+
+.day-hint {
+  margin: 0.55rem 0 0;
+  color: var(--danger);
+  font-size: 0.88rem;
+}
+
 .park-chip {
   appearance: none;
   margin: 0;

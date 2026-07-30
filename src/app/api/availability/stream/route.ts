@@ -6,8 +6,14 @@ import type { AvailabilityReport, CheckEvent } from "@/lib/bcparks/types";
 import {
   isIsoDate,
   type DateOverrides,
+  type DayOfWeek,
   type PartyOverrides,
 } from "@/config/watcher.config";
+import {
+  areNightsContiguous,
+  isDayOfWeek,
+  orderContiguousNights,
+} from "@/lib/bcparks/weekends";
 import type { NextRequest } from "next/server";
 
 export const dynamic = "force-dynamic";
@@ -48,6 +54,18 @@ function parseDateOverrides(
   return { startDate, endDate };
 }
 
+function parseNights(searchParams: URLSearchParams): DayOfWeek[] | undefined {
+  const raw = searchParams.get("nights");
+  if (!raw) return undefined;
+  const nights = raw
+    .split(",")
+    .map((part) => part.trim().toLowerCase())
+    .filter(isDayOfWeek);
+  if (nights.length === 0) return undefined;
+  if (!areNightsContiguous(nights)) return undefined;
+  return orderContiguousNights(nights);
+}
+
 export async function GET(request: NextRequest) {
   const parksParam = request.nextUrl.searchParams.get("parks");
   const shortNames = parksParam
@@ -59,6 +77,7 @@ export async function GET(request: NextRequest) {
 
   const partyOverrides = parsePartyOverrides(request.nextUrl.searchParams);
   const dateOverrides = parseDateOverrides(request.nextUrl.searchParams);
+  const nights = parseNights(request.nextUrl.searchParams);
   const encoder = new TextEncoder();
 
   const stream = new ReadableStream<Uint8Array>({
@@ -69,8 +88,8 @@ export async function GET(request: NextRequest) {
         for await (const event of streamAvailabilityCheck(
           {
             ...(partyOverrides ? { partyOverrides } : {}),
-            // Always apply date resolution so start defaults to today
             dateOverrides: dateOverrides ?? {},
+            ...(nights ? { nights } : {}),
           },
           { shortNames },
         )) {

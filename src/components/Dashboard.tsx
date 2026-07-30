@@ -1,6 +1,15 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { DayOfWeek } from "@/config/watcher.config";
+import {
+  areNightsContiguous,
+  DAYS_OF_WEEK,
+  isDayOfWeek,
+  orderContiguousNights,
+  shortDayLabel,
+  staySpanLabel,
+} from "@/lib/bcparks/weekends";
 import type {
   AvailabilityReport,
   CheckEvent,
@@ -103,6 +112,8 @@ const DEFAULT_DATES: DateSettings = {
   endDate: "2026-09-08",
 };
 
+const DEFAULT_NIGHTS: DayOfWeek[] = ["friday", "saturday"];
+
 function partyFromConfig(config: PublicConfig): PartySettings {
   return {
     partySize: config.partySize ?? DEFAULT_PARTY.partySize,
@@ -117,10 +128,28 @@ function datesFromConfig(config: PublicConfig): DateSettings {
   };
 }
 
+function nightsFromConfig(config: PublicConfig): DayOfWeek[] {
+  const parsed = (config.nights ?? [])
+    .map((night) => night.toLowerCase())
+    .filter(isDayOfWeek);
+  if (parsed.length > 0 && areNightsContiguous(parsed)) {
+    return orderContiguousNights(parsed);
+  }
+  return DEFAULT_NIGHTS;
+}
+
 function formatPartyLabel(party: PartySettings): string {
   const people = `${party.partySize} ${party.partySize === 1 ? "person" : "people"}`;
   const tentLabel = `${party.tents} tent${party.tents === 1 ? "" : "s"}`;
   return `${people}, ${tentLabel}`;
+}
+
+function nightsKey(nights: DayOfWeek[]): string {
+  return nights.join(",");
+}
+
+function nightSelectionLabel(nights: DayOfWeek[]): string {
+  return orderContiguousNights(nights).map(shortDayLabel).join("+");
 }
 
 export function Dashboard() {
@@ -138,13 +167,28 @@ export function Dashboard() {
   const [selectedParks, setSelectedParks] = useState<Set<string>>(new Set());
   const [party, setParty] = useState<PartySettings>(DEFAULT_PARTY);
   const [dates, setDates] = useState<DateSettings>(DEFAULT_DATES);
+  const [nights, setNights] = useState<DayOfWeek[]>(DEFAULT_NIGHTS);
   const [settingsReady, setSettingsReady] = useState(false);
   const previousHits = useRef<Set<string>>(new Set());
   const abortRef = useRef<AbortController | null>(null);
   const selectedParksRef = useRef(selectedParks);
   const partyRef = useRef(party);
   const datesRef = useRef(dates);
+  const nightsRef = useRef(nights);
   const skipSettingsReload = useRef(true);
+
+  const nightsContiguous = useMemo(
+    () => areNightsContiguous(nights),
+    [nights],
+  );
+  const orderedNights = useMemo(
+    () => (nightsContiguous ? orderContiguousNights(nights) : nights),
+    [nights, nightsContiguous],
+  );
+  const stayLabel = useMemo(
+    () => (nightsContiguous ? staySpanLabel(nights) : "Pick nights"),
+    [nights, nightsContiguous],
+  );
 
   useEffect(() => {
     selectedParksRef.current = selectedParks;
@@ -158,33 +202,47 @@ export function Dashboard() {
     datesRef.current = dates;
   }, [dates]);
 
+  useEffect(() => {
+    nightsRef.current = nights;
+  }, [nights]);
+
   const load = useCallback(async (parksOverride?: Set<string>) => {
     const parksToCheck = parksOverride ?? selectedParksRef.current;
     const partyToUse = partyRef.current;
     const datesToUse = datesRef.current;
+    const nightsToUse = nightsRef.current;
 
     abortRef.current?.abort();
     const controller = new AbortController();
     abortRef.current = controller;
 
     setError(null);
-    setIsChecking(true);
     setWeekends([]);
     setErrors([]);
     setProgress({ index: 0, total: 0 });
     previousHits.current = new Set();
+
+    if (!areNightsContiguous(nightsToUse)) {
+      setIsChecking(false);
+      setError("Select contiguous nights before searching.");
+      return;
+    }
+
+    setIsChecking(true);
 
     if (parksToCheck.size === 0) {
       setIsChecking(false);
       return;
     }
 
+    const ordered = orderContiguousNights(nightsToUse);
     const params = new URLSearchParams({
       parks: Array.from(parksToCheck).join(","),
       partySize: String(partyToUse.partySize),
       tents: String(partyToUse.tents),
       startDate: datesToUse.startDate,
       endDate: datesToUse.endDate,
+      nights: ordered.join(","),
     });
 
     try {
@@ -303,12 +361,15 @@ export function Dashboard() {
         const parks = new Set(data.parks.map((park) => park.shortName));
         const nextParty = partyFromConfig(data);
         const nextDates = datesFromConfig(data);
+        const nextNights = nightsFromConfig(data);
         setConfig(data);
         setSelectedParks(parks);
         setParty(nextParty);
         setDates(nextDates);
+        setNights(nextNights);
         partyRef.current = nextParty;
         datesRef.current = nextDates;
+        nightsRef.current = nextNights;
         setSettingsReady(true);
         void load(parks);
       })
@@ -346,11 +407,16 @@ export function Dashboard() {
     return () => window.clearInterval(id);
   }, [autoRefresh, config, load]);
 
-  // Restart search when party or date settings change (after initial load).
+  // Restart search when party, date, or night settings change (after initial load).
   useEffect(() => {
     if (!settingsReady || !config) return;
     if (skipSettingsReload.current) {
       skipSettingsReload.current = false;
+      return;
+    }
+    if (!areNightsContiguous(nights)) {
+      abortRef.current?.abort();
+      setIsChecking(false);
       return;
     }
     const id = window.setTimeout(() => {
@@ -364,6 +430,7 @@ export function Dashboard() {
     party.tents,
     dates.startDate,
     dates.endDate,
+    nightsKey(nights),
     settingsReady,
   ]);
 
@@ -380,6 +447,15 @@ export function Dashboard() {
       else next.add(shortName);
       void load(next);
       return next;
+    });
+  };
+
+  const toggleNight = (day: DayOfWeek) => {
+    setNights((current) => {
+      const selected = new Set(current);
+      if (selected.has(day)) selected.delete(day);
+      else selected.add(day);
+      return DAYS_OF_WEEK.filter((entry) => selected.has(entry));
     });
   };
 
@@ -428,6 +504,9 @@ export function Dashboard() {
     party.partySize === 1 ? "1 person" : `${party.partySize} people`;
   const tentLabel =
     party.tents === 1 ? "1 tent" : `${party.tents} tents`;
+  const nightsShort = nightsContiguous
+    ? nightSelectionLabel(orderedNights)
+    : "non-contiguous nights";
 
   return (
     <div className="page-shell">
@@ -435,7 +514,7 @@ export function Dashboard() {
         <p className="brand">BC Parks Watcher</p>
         <h1>
           {config
-            ? `Fri–Sun · ${formatRangeLabel(dates.startDate, dates.endDate)}`
+            ? `${stayLabel} · ${formatRangeLabel(dates.startDate, dates.endDate)}`
             : "Weekend availability"}
         </h1>
         <p className="lede">
@@ -443,9 +522,9 @@ export function Dashboard() {
           {config?.maxDriveMinutesFromHome
             ? ` within ${Math.round(config.maxDriveMinutesFromHome / 60)} hours`
             : ""}{" "}
-          of {config?.homeBase || "home"} for Friday→Sunday stays{" "}
+          of {config?.homeBase || "home"} for {stayLabel.replace("–", "→")} stays{" "}
           {formatRangeLabel(dates.startDate, dates.endDate)} · {peopleLabel},{" "}
-          {tentLabel}. Showing same-site Fri+Sat availability only.
+          {tentLabel}. Showing same-site {nightsShort} availability only.
         </p>
 
         <div className="actions">
@@ -465,6 +544,7 @@ export function Dashboard() {
               type="button"
               className="btn primary"
               onClick={() => void load()}
+              disabled={!nightsContiguous || selectedParks.size === 0}
             >
               Check now
             </button>
@@ -534,6 +614,29 @@ export function Dashboard() {
           />
         </div>
 
+        <div className="day-chips" role="group" aria-label="Nights to stay">
+          {DAYS_OF_WEEK.map((day) => {
+            const selected = nights.includes(day);
+            return (
+              <button
+                key={day}
+                type="button"
+                className={`day-chip ${selected ? "selected" : ""}`}
+                aria-pressed={selected}
+                onClick={() => toggleNight(day)}
+              >
+                {shortDayLabel(day)}
+              </button>
+            );
+          })}
+        </div>
+        {!nightsContiguous ? (
+          <p className="day-hint">
+            Select contiguous nights (for example Fri+Sat, or Fri–Sun) before
+            searching.
+          </p>
+        ) : null}
+
         {isChecking && progress.total > 0 ? (
           <div
             className="progress-track"
@@ -577,10 +680,10 @@ export function Dashboard() {
         <h2>Bookable weekends</h2>
         <p className="section-copy">
           {fullHits.length > 0
-            ? "Same campsite online-reservable Friday and Saturday — book quickly."
+            ? `Same campsite online-reservable for ${nightsShort} — book quickly.`
             : isChecking
-              ? "Still scanning… online-reservable Fri+Sat openings will show here."
-              : `No online-reservable Fri+Sat openings across ${weekends.length || "checked"} park/weekend combos.`}
+              ? `Still scanning… online-reservable ${nightsShort} openings will show here.`
+              : `No online-reservable ${nightsShort} openings across ${weekends.length || "checked"} park/weekend combos.`}
         </p>
         {fullHits.length > 0 ? (
           <div className="result-list">

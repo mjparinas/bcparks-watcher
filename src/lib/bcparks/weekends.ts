@@ -1,5 +1,15 @@
 import type { DayOfWeek } from "@/config/watcher.config";
 
+export const DAYS_OF_WEEK: DayOfWeek[] = [
+  "sunday",
+  "monday",
+  "tuesday",
+  "wednesday",
+  "thursday",
+  "friday",
+  "saturday",
+];
+
 const DAY_INDEX: Record<DayOfWeek, number> = {
   sunday: 0,
   monday: 1,
@@ -9,6 +19,58 @@ const DAY_INDEX: Record<DayOfWeek, number> = {
   friday: 5,
   saturday: 6,
 };
+
+const INDEX_TO_DAY = DAYS_OF_WEEK;
+
+export function isDayOfWeek(value: string): value is DayOfWeek {
+  return (DAYS_OF_WEEK as string[]).includes(value);
+}
+
+/** Selected nights form one contiguous block (allows week wrap, e.g. Sat–Mon). */
+export function areNightsContiguous(nights: DayOfWeek[]): boolean {
+  if (nights.length === 0) return false;
+  const selected = new Set(nights.map((day) => DAY_INDEX[day]));
+  if (selected.size !== nights.length) return false;
+  if (selected.size === 1 || selected.size === 7) return true;
+
+  let transitions = 0;
+  for (let i = 0; i < 7; i += 1) {
+    const cur = selected.has(i);
+    const next = selected.has((i + 1) % 7);
+    if (cur !== next) transitions += 1;
+  }
+  return transitions === 2;
+}
+
+/** Order nights from the start of the contiguous block through departure. */
+export function orderContiguousNights(nights: DayOfWeek[]): DayOfWeek[] {
+  if (nights.length === 0) return [];
+  const selected = new Set(nights.map((day) => DAY_INDEX[day]));
+  let start = [...selected][0] ?? 0;
+  for (let i = 0; i < 7; i += 1) {
+    if (selected.has(i) && !selected.has((i + 6) % 7)) {
+      start = i;
+      break;
+    }
+  }
+  return Array.from({ length: selected.size }, (_, step) =>
+    INDEX_TO_DAY[(start + step) % 7],
+  );
+}
+
+export function shortDayLabel(day: DayOfWeek): string {
+  return day.slice(0, 3).replace(/^./, (c) => c.toUpperCase());
+}
+
+/** Arrive–depart label for selected nights, e.g. Fri+Sat → "Fri–Sun". */
+export function staySpanLabel(nights: DayOfWeek[]): string {
+  const ordered = orderContiguousNights(nights);
+  if (ordered.length === 0) return "Pick nights";
+  const arrive = shortDayLabel(ordered[0]);
+  const depart =
+    INDEX_TO_DAY[(DAY_INDEX[ordered[ordered.length - 1]] + 1) % 7];
+  return `${arrive}–${shortDayLabel(depart)}`;
+}
 
 export type WeekendWindow = {
   /** Inclusive night dates, in order */
@@ -60,11 +122,15 @@ export function getWeekendWindowsInRange(
   nights: DayOfWeek[],
 ): WeekendWindow[] {
   if (nights.length === 0) return [];
+  const ordered = areNightsContiguous(nights)
+    ? orderContiguousNights(nights)
+    : nights;
+  if (!areNightsContiguous(ordered)) return [];
 
   const rangeStart = parseIsoDate(startDate);
   const rangeEnd = parseIsoDate(endDate);
-  const firstNightDow = DAY_INDEX[nights[0]];
-  const offsets = nightOffsets(nights);
+  const firstNightDow = DAY_INDEX[ordered[0]];
+  const offsets = nightOffsets(ordered);
   const windows: WeekendWindow[] = [];
 
   for (

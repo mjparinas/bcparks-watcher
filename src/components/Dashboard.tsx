@@ -104,12 +104,7 @@ export function Dashboard() {
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [notifyPermission, setNotifyPermission] = useState<
     NotificationPermission | "unsupported"
-  >(() => {
-    if (typeof window === "undefined" || !("Notification" in window)) {
-      return "default";
-    }
-    return Notification.permission;
-  });
+  >("default");
   const previousHits = useRef<Set<string>>(new Set());
   const abortRef = useRef<AbortController | null>(null);
 

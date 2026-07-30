@@ -737,7 +737,10 @@ export function Dashboard() {
             className={`text-toggle ${autoRefresh ? "on" : ""}`}
             onClick={() => setAutoRefresh((value) => !value)}
           >
-            Auto {autoRefresh ? "on" : "off"}
+            Auto{" "}
+            {autoRefresh
+              ? `${config?.pollIntervalMinutes ?? 5} mins`
+              : "off"}
           </button>
           {notifyPermission !== "granted" &&
           notifyPermission !== "unsupported" ? (

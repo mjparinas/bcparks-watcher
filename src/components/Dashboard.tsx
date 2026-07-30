@@ -921,22 +921,25 @@ export function Dashboard() {
           </h2>
           {fullHits.length > 0 ? (
             <div className="sort-toggle" role="group" aria-label="Sort openings">
-              <button
-                type="button"
-                className={`text-toggle ${sortBy === "date" ? "on" : ""}`}
-                aria-pressed={sortBy === "date"}
-                onClick={() => setSortBy("date")}
-              >
-                By date
-              </button>
-              <button
-                type="button"
-                className={`text-toggle ${sortBy === "distance" ? "on" : ""}`}
-                aria-pressed={sortBy === "distance"}
-                onClick={() => setSortBy("distance")}
-              >
-                By distance
-              </button>
+              <span className="sort-label">Sort</span>
+              <div className="sort-seg">
+                <button
+                  type="button"
+                  className={`sort-option ${sortBy === "date" ? "selected" : ""}`}
+                  aria-pressed={sortBy === "date"}
+                  onClick={() => setSortBy("date")}
+                >
+                  Date
+                </button>
+                <button
+                  type="button"
+                  className={`sort-option ${sortBy === "distance" ? "selected" : ""}`}
+                  aria-pressed={sortBy === "distance"}
+                  onClick={() => setSortBy("distance")}
+                >
+                  Distance
+                </button>
+              </div>
             </div>
           ) : null}
         </div>

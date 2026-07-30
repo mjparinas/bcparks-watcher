@@ -23,7 +23,7 @@ const MAX_ATTEMPTS = 5;
  * Soft ceiling for outbound BC Parks calls from this process.
  * Undocumented edge limits + WAF mean bursts get 403/429; stay polite.
  */
-const MAX_IN_FLIGHT = 2;
+const MAX_IN_FLIGHT = 4;
 const MIN_START_GAP_MS = 350;
 /** After repeated blocks, pause the whole process briefly. */
 const CIRCUIT_BLOCKS = 3;

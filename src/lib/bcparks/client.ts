@@ -24,17 +24,19 @@ const MAX_ATTEMPTS = 5;
  * Undocumented edge limits + WAF mean bursts get 403/429; stay polite.
  */
 const MAX_IN_FLIGHT = 4;
-const MIN_START_GAP_MS = 350;
+const MIN_START_GAP_MS = 225;
 /** After repeated blocks, pause the whole process briefly. */
 const CIRCUIT_BLOCKS = 3;
 const CIRCUIT_COOLDOWN_MS = 60_000;
+/** Short personal TTL — snappy re-search without multi-minute staleness. */
+const RESPONSE_TTL_MS = 25_000;
 
 /**
- * Availability changes minute-to-minute, so we never reuse BC Parks JSON
- * across searches. Concurrent callers for the same URL share one in-flight
- * fetch — that avoids stampedes without serving stale data next Search.
+ * Concurrent callers for the same URL share one in-flight fetch.
+ * Successful responses are reused briefly (RESPONSE_TTL_MS).
  */
 const inflightGets = new Map<string, Promise<unknown>>();
+const responseCache = new Map<string, { expires: number; value: unknown }>();
 
 const paceState = {
   inFlight: 0,
@@ -178,14 +180,28 @@ async function fetchJsonWithRetry<T>(url: string): Promise<T> {
 }
 
 async function getJson<T>(url: string): Promise<T> {
+  const cached = responseCache.get(url);
+  if (cached && cached.expires > Date.now()) {
+    return cached.value as T;
+  }
+  if (cached) responseCache.delete(url);
+
   const existing = inflightGets.get(url);
   if (existing) return existing as Promise<T>;
 
-  const request = fetchJsonWithRetry<T>(url).finally(() => {
-    if (inflightGets.get(url) === request) {
-      inflightGets.delete(url);
-    }
-  });
+  const request = fetchJsonWithRetry<T>(url)
+    .then((data) => {
+      responseCache.set(url, {
+        expires: Date.now() + RESPONSE_TTL_MS,
+        value: data,
+      });
+      return data;
+    })
+    .finally(() => {
+      if (inflightGets.get(url) === request) {
+        inflightGets.delete(url);
+      }
+    });
 
   inflightGets.set(url, request);
   return request;

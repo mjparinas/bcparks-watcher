@@ -22,8 +22,10 @@ import {
   fetchParkAvailability,
   fetchResourceNames,
   isOnlineReservableStay,
+  type SiteDailyAvailability,
 } from "./client";
 import {
+  addDays,
   dayName,
   formatDate,
   getWeekendWindowsInRange,
@@ -37,10 +39,10 @@ export type CheckOverrides = Partial<WatcherConfig> & {
   dateOverrides?: DateOverrides;
 };
 
-/** How many park/weekend jobs to run at once (outbound calls are also paced). */
-const PARK_WINDOW_CONCURRENCY = 4;
+/** How many parks to process at once (outbound calls are also paced). */
+const PARK_CONCURRENCY = 4;
 /** Max sites to confirm via processedAvailability per park/weekend */
-const MAX_VERIFY_SITES = 10;
+const MAX_VERIFY_SITES = 5;
 
 function resolveConfig(overrides?: CheckOverrides): WatcherConfig {
   const { partyOverrides, dateOverrides, ...rest } = overrides ?? {};
@@ -97,14 +99,60 @@ function buildMeta(
   };
 }
 
-async function collectDailyCandidates(options: {
+function parseIsoDate(iso: string): Date {
+  const [year, month, day] = iso.split("-").map(Number);
+  return new Date(Date.UTC(year, month - 1, day));
+}
+
+/** Inclusive night dates covered by [startDate, endDate). */
+function nightsInExclusiveRange(startDate: string, endDate: string): string[] {
+  const start = parseIsoDate(startDate);
+  const end = parseIsoDate(endDate);
+  const nights: string[] = [];
+  for (let cursor = start; cursor < end; cursor = addDays(cursor, 1)) {
+    nights.push(formatDate(cursor));
+  }
+  return nights;
+}
+
+function buildDateIndex(nightDates: string[]): Map<string, number> {
+  const index = new Map<string, number>();
+  nightDates.forEach((date, i) => index.set(date, i));
+  return index;
+}
+
+function candidatesForWindow(
+  daily: Record<string, SiteDailyAvailability>,
+  window: WeekendWindow,
+  dateIndex: Map<string, number>,
+): OpenSite[] {
+  const nightIndexes = window.nights.map((date) =>
+    dateIndex.get(formatDate(date)),
+  );
+  if (nightIndexes.some((i) => i == null)) return [];
+
+  const indexes = nightIndexes as number[];
+  const candidates: OpenSite[] = [];
+
+  for (const [resourceId, site] of Object.entries(daily)) {
+    if (indexes.some((i) => i >= site.nights.length)) continue;
+    const everyNightOpen = indexes.every(
+      (i) => site.nights[i] === AVAILABILITY_OPEN,
+    );
+    if (!everyNightOpen) continue;
+    candidates.push({ resourceId, mapId: site.mapId });
+  }
+
+  return candidates;
+}
+
+async function fetchParkDailyRange(options: {
   park: ParkConfig;
   config: WatcherConfig;
   startDate: string;
   endDateApi: string;
-  nightCount: number;
-}): Promise<OpenSite[]> {
-  const daily = await fetchParkAvailability({
+}): Promise<Record<string, SiteDailyAvailability>> {
+  return fetchParkAvailability({
     rootMapId: options.park.rootMapId,
     resourceLocationId: options.park.resourceLocationId,
     startDate: options.startDate,
@@ -116,19 +164,6 @@ async function collectDailyCandidates(options: {
     mapIds: options.park.mapIds,
     getDailyAvailability: true,
   });
-
-  const candidates: OpenSite[] = [];
-
-  for (const [resourceId, site] of Object.entries(daily)) {
-    if (site.nights.length < options.nightCount) continue;
-    const everyNightOpen = site.nights
-      .slice(0, options.nightCount)
-      .every((code) => code === AVAILABILITY_OPEN);
-    if (!everyNightOpen) continue;
-    candidates.push({ resourceId, mapId: site.mapId });
-  }
-
-  return candidates;
 }
 
 async function verifyOnlineReservableSites(options: {
@@ -177,29 +212,20 @@ async function attachSiteNames(
   }
 }
 
-/**
- * Same campsite online-reservable for every night in the stay.
- * Uses daily map availability only (no continuous pass), skips booked
- * child maps, and caps processedAvailability verification.
- */
-async function checkParkWindow(
-  config: WatcherConfig,
-  park: ParkConfig,
-  window: WeekendWindow,
-): Promise<WeekendResult> {
+async function buildWeekendResult(options: {
+  config: WatcherConfig;
+  park: ParkConfig;
+  window: WeekendWindow;
+  daily: Record<string, SiteDailyAvailability>;
+  dateIndex: Map<string, number>;
+}): Promise<WeekendResult> {
+  const { config, park, window, daily, dateIndex } = options;
   const startDate = formatDate(window.arrival);
   const endDateApi = formatDate(window.nights[window.nights.length - 1]);
   const departureDate = formatDate(window.departure);
   const nightCount = window.nights.length;
 
-  const candidates = await collectDailyCandidates({
-    park,
-    config,
-    startDate,
-    endDateApi,
-    nightCount,
-  });
-
+  const candidates = candidatesForWindow(daily, window, dateIndex);
   const toVerify = candidates.slice(0, MAX_VERIFY_SITES);
   const sitesCapped = candidates.length > MAX_VERIFY_SITES;
 
@@ -247,6 +273,44 @@ async function checkParkWindow(
   };
 }
 
+/**
+ * One map-tree walk for the full search range, then slice each stay window
+ * in memory and verify a capped set of candidate sites.
+ */
+async function checkParkWindows(
+  config: WatcherConfig,
+  park: ParkConfig,
+  windows: WeekendWindow[],
+): Promise<WeekendResult[]> {
+  if (windows.length === 0) return [];
+
+  const rangeNights = nightsInExclusiveRange(config.startDate, config.endDate);
+  if (rangeNights.length === 0) return [];
+
+  const endDateApi = rangeNights[rangeNights.length - 1];
+  const dateIndex = buildDateIndex(rangeNights);
+  const daily = await fetchParkDailyRange({
+    park,
+    config,
+    startDate: config.startDate,
+    endDateApi,
+  });
+
+  const results: WeekendResult[] = [];
+  for (const window of windows) {
+    results.push(
+      await buildWeekendResult({
+        config,
+        park,
+        window,
+        daily,
+        dateIndex,
+      }),
+    );
+  }
+  return results;
+}
+
 export type MoreOpenSitesResult = {
   parkShortName: string;
   arrivalDate: string;
@@ -279,15 +343,27 @@ export async function findRemainingOpenSites(options: {
   }
 
   const exclude = new Set(options.excludeResourceIds ?? []);
-  const candidates = (
-    await collectDailyCandidates({
-      park,
-      config,
-      startDate: options.arrivalDate,
-      endDateApi: options.lastNightDate,
-      nightCount: options.nightCount,
-    })
-  ).filter((site) => !exclude.has(site.resourceId));
+  const daily = await fetchParkDailyRange({
+    park,
+    config,
+    startDate: options.arrivalDate,
+    endDateApi: options.lastNightDate,
+  });
+
+  const nightDates = nightsInExclusiveRange(
+    options.arrivalDate,
+    formatDate(addDays(parseIsoDate(options.lastNightDate), 1)),
+  );
+  const dateIndex = buildDateIndex(nightDates);
+  const fakeWindow: WeekendWindow = {
+    nights: nightDates.map(parseIsoDate),
+    arrival: parseIsoDate(options.arrivalDate),
+    departure: addDays(parseIsoDate(options.lastNightDate), 1),
+  };
+
+  const candidates = candidatesForWindow(daily, fakeWindow, dateIndex).filter(
+    (site) => !exclude.has(site.resourceId),
+  );
 
   const verified = await verifyOnlineReservableSites({
     candidates,
@@ -305,13 +381,8 @@ export async function findRemainingOpenSites(options: {
   };
 }
 
-type Job = {
-  park: ParkConfig;
-  window: WeekendWindow;
-};
-
 /**
- * Yields availability results as park/weekend jobs finish (parallel).
+ * Yields availability results as parks finish (one map walk per park).
  */
 export async function* streamAvailabilityCheck(
   overrides?: CheckOverrides,
@@ -326,17 +397,14 @@ export async function* streamAvailabilityCheck(
     config.endDate,
     config.nights,
   );
-  const jobs: Job[] = enabledParks.flatMap((park) =>
-    windows.map((window) => ({ park, window })),
-  );
-  const total = jobs.length;
+  const total = enabledParks.length * windows.length;
   const weekends: WeekendResult[] = [];
   const errors: string[] = [];
   const meta = buildMeta(config, enabledParks, total);
 
   yield { type: "meta", meta };
 
-  if (jobs.length === 0) {
+  if (enabledParks.length === 0 || windows.length === 0) {
     yield {
       type: "done",
       report: {
@@ -348,8 +416,8 @@ export async function* streamAvailabilityCheck(
     return;
   }
 
-  const concurrency = Math.min(PARK_WINDOW_CONCURRENCY, jobs.length);
-  let nextJob = 0;
+  const concurrency = Math.min(PARK_CONCURRENCY, enabledParks.length);
+  let nextPark = 0;
   let active = 0;
   let completed = 0;
   const eventQueue: CheckEvent[] = [];
@@ -360,36 +428,39 @@ export async function* streamAvailabilityCheck(
     wake = null;
   };
 
-  const startJob = () => {
-    if (nextJob >= jobs.length) return;
-    const job = jobs[nextJob];
-    nextJob += 1;
+  const startPark = () => {
+    if (nextPark >= enabledParks.length) return;
+    const park = enabledParks[nextPark];
+    nextPark += 1;
     active += 1;
 
     void (async () => {
-      const startDate = formatDate(job.window.arrival);
       try {
-        const result = await checkParkWindow(config, job.park, job.window);
-        weekends.push(result);
-        completed += 1;
-        eventQueue.push({
-          type: "result",
-          index: completed,
-          total,
-          result,
-        });
+        const results = await checkParkWindows(config, park, windows);
+        for (const result of results) {
+          weekends.push(result);
+          completed += 1;
+          eventQueue.push({
+            type: "result",
+            index: completed,
+            total,
+            result,
+          });
+        }
       } catch (error) {
         const message =
           error instanceof Error ? error.message : "Unknown park check error";
-        const labeled = `${job.park.shortName} ${startDate}: ${message}`;
-        errors.push(labeled);
-        completed += 1;
-        eventQueue.push({
-          type: "error",
-          index: completed,
-          total,
-          error: labeled,
-        });
+        for (const window of windows) {
+          const labeled = `${park.shortName} ${formatDate(window.arrival)}: ${message}`;
+          errors.push(labeled);
+          completed += 1;
+          eventQueue.push({
+            type: "error",
+            index: completed,
+            total,
+            error: labeled,
+          });
+        }
       } finally {
         active -= 1;
         signal();
@@ -397,9 +468,9 @@ export async function* streamAvailabilityCheck(
     })();
   };
 
-  while (completed < jobs.length) {
-    while (active < concurrency && nextJob < jobs.length) {
-      startJob();
+  while (completed < total) {
+    while (active < concurrency && nextPark < enabledParks.length) {
+      startPark();
     }
     if (eventQueue.length === 0) {
       await new Promise<void>((resolve) => {

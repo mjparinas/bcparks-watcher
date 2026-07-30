@@ -128,6 +128,31 @@ code {
   color: var(--lake);
 }
 
+.btn.stop {
+  width: 2.75rem;
+  padding-left: 0;
+  padding-right: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(155, 59, 46, 0.1);
+  border-color: rgba(155, 59, 46, 0.35);
+  color: var(--danger);
+}
+
+.btn.stop:hover:not(:disabled) {
+  background: rgba(155, 59, 46, 0.16);
+  border-color: rgba(155, 59, 46, 0.5);
+}
+
+.stop-icon {
+  display: block;
+  width: 0.7rem;
+  height: 0.7rem;
+  border-radius: 0.12rem;
+  background: currentColor;
+}
+
 .meta {
   margin: 0.9rem 0 0;
   color: var(--ink-soft);

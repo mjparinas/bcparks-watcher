@@ -457,6 +457,17 @@ export function Dashboard() {
           >
             {isChecking ? progressLabel || "Checking…" : "Check now"}
           </button>
+          {isChecking ? (
+            <button
+              type="button"
+              className="btn stop"
+              aria-label="Stop search"
+              title="Stop search"
+              onClick={() => abortRef.current?.abort()}
+            >
+              <span className="stop-icon" aria-hidden="true" />
+            </button>
+          ) : null}
           <button
             type="button"
             className={`btn ${autoRefresh ? "active" : ""}`}

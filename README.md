@@ -21,7 +21,7 @@ npm install
 npm run dev
 ```
 
-Open [http://localhost:3456](http://localhost:3456). `npm run dev` uses nodemon, so the server restarts when files under `src/` change. The dashboard auto-refreshes on the interval in config (default 10 minutes).
+Open [http://localhost:3456](http://localhost:3456). `npm run dev` uses nodemon, so the server restarts when files under `src/` change. The dashboard auto-refreshes on the interval in config (default 5 minutes).
 
 ## Adjust locations and times
 
@@ -34,7 +34,8 @@ export const watcherConfig = {
   startDate: "2026-07-29",
   endDate: "2026-09-08", // school start (exclusive)
   nights: ["friday", "saturday"], // Fri→Sun
-  pollIntervalMinutes: 10,
+  pollIntervalMinutes: 5,
+  excludeDoubleSites: false, // default for the "Hide doubles" chip
   partySize: 4,
   party: { tents: 1 },
   subEquipmentCategoryId: -32768, // 1 Tent
@@ -62,6 +63,10 @@ nights: ["friday", "saturday"] // leave Sunday morning
 
 Date range is `startDate` → `endDate` (exclusive). Stays must arrive on/after `startDate` and depart before `endDate`.
 
+### Double sites
+
+Some campsites are half of a **double** — BC Parks only rents the pair together, so one half alone is not really bookable for a single group. The **Hide doubles** chip filters them out; leave it off and doubles show up with an `×2` marker. The setting sticks per browser.
+
 ## API routes
 
 | Route | Purpose |
@@ -75,8 +80,8 @@ Date range is `startDate` → `endDate` (exclusive). Stays must arrive on/after 
 
 ## Periodic checks
 
-1. **Dashboard auto-refresh** — `pollIntervalMinutes` (default 10)
-2. **Vercel Cron** — [`vercel.json`](vercel.json) hits `/api/cron` every 10 minutes
+1. **Dashboard auto-refresh** — `pollIntervalMinutes` (default 5)
+2. **Vercel Cron** — [`vercel.json`](vercel.json) hits `/api/cron` every 5 minutes
 3. **Webhook alerts** — set `NOTIFY_WEBHOOK_URL` in `.env.local`
 4. **Browser notifications** — enable alerts on the dashboard
 
@@ -85,6 +90,6 @@ Optional env (see `.env.example`): `NOTIFY_WEBHOOK_URL`, `CRON_SECRET`.
 ## Notes
 
 - Data comes from the public GoingToCamp API used by camping.bcparks.ca. It can change without notice.
-- Be polite with polling; 10 minutes is the current default.
+- Be polite with polling; 5 minutes is the current default.
 - “Full” means at least one site is open on **every** selected night.
 - Book links open the official BC Parks reservation flow.

@@ -22,6 +22,7 @@ export async function GET() {
     maxDriveMinutesFromHome: config.maxDriveMinutesFromHome,
     excludeFerry: config.excludeFerry,
     excludeTollRoads: config.excludeTollRoads,
+    excludeDoubleSites: config.excludeDoubleSites,
     startDate: config.startDate,
     endDate: config.endDate,
     endDateLabel: config.endDateLabel,

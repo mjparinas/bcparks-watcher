@@ -20,6 +20,11 @@ function parsePartyOverrides(
   return { partySize, tents };
 }
 
+function parseBoolParam(value: string | null): boolean | undefined {
+  if (value == null || value === "") return undefined;
+  return value === "1" || value.toLowerCase() === "true";
+}
+
 export async function GET(request: NextRequest) {
   const params = request.nextUrl.searchParams;
   const park = params.get("park")?.trim();
@@ -55,6 +60,7 @@ export async function GET(request: NextRequest) {
       nightCount,
       excludeResourceIds: exclude,
       partyOverrides: parsePartyOverrides(params),
+      excludeDoubleSites: parseBoolParam(params.get("excludeDoubles")),
     });
     return NextResponse.json(result);
   } catch (error) {

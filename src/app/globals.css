@@ -42,7 +42,7 @@ body {
 }
 
 .page-shell {
-  width: min(720px, calc(100% - 2rem));
+  width: min(880px, calc(100% - 2rem));
   margin: 0 auto;
   padding: 2rem 0 3.5rem;
 }
@@ -172,6 +172,14 @@ body {
   display: flex;
   flex-direction: column;
   gap: 0.45rem;
+}
+
+/* Side-by-side filter blocks that wrap to their own rows when cramped. */
+.filter-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 1.1rem 1.6rem;
 }
 
 .filter-label {
@@ -558,11 +566,24 @@ a.site-id:hover {
   background: transparent;
 }
 
+.site-id.double {
+  gap: 0.2rem;
+  align-items: center;
+}
+
+.site-double {
+  font-size: 0.62rem;
+  font-weight: 700;
+  opacity: 0.65;
+}
+
 button.site-id.more-sites {
   cursor: pointer;
   font: inherit;
   font-size: 0.72rem;
   font-weight: 650;
+  align-items: center;
+  gap: 0.3rem;
 }
 
 button.site-id.more-sites:hover:not(:disabled) {
@@ -573,6 +594,22 @@ button.site-id.more-sites:hover:not(:disabled) {
 button.site-id.more-sites:disabled {
   cursor: wait;
   opacity: 0.7;
+}
+
+.chip-spinner {
+  width: 0.62rem;
+  height: 0.62rem;
+  flex-shrink: 0;
+  border-radius: 50%;
+  border: 1.5px solid currentColor;
+  border-top-color: transparent;
+  animation: chip-spin 0.6s linear infinite;
+}
+
+@keyframes chip-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .more-error {

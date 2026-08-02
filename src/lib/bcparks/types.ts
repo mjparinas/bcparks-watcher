@@ -43,6 +43,8 @@ export type OpenSite = {
   mapId: number;
   /** Campsite label from BC Parks (e.g. "B59", "D7") */
   name?: string;
+  /** Half of a double site — both halves must be booked (and paid for) together */
+  isDouble?: boolean;
 };
 
 export type WeekendResult = {

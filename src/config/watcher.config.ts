@@ -169,6 +169,11 @@ export type WatcherConfig = {
   /** Drop any park marked requiresTollRoad */
   excludeTollRoads: boolean;
   /**
+   * Skip half-of-a-double campsites, which can only be booked (and paid for)
+   * together with their linked other half.
+   */
+  excludeDoubleSites: boolean;
+  /**
    * Inclusive start of the search window (YYYY-MM-DD).
    * Weekends must arrive on or after this date.
    */
@@ -219,6 +224,7 @@ export const watcherConfig: WatcherConfig = {
   maxDriveMinutesFromHome: 180,
   excludeFerry: true,
   excludeTollRoads: true,
+  excludeDoubleSites: false,
 
   // Default window: today → day school starts (refreshed at request time)
   startDate: "2026-07-29",
@@ -228,7 +234,7 @@ export const watcherConfig: WatcherConfig = {
   // Arrive Friday, stay Fri/Sat nights, leave Sunday
   nights: ["friday", "saturday"],
 
-  pollIntervalMinutes: 10,
+  pollIntervalMinutes: 5,
 
   party: {
     tents: 1,

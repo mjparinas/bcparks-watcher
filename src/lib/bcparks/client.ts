@@ -22,9 +22,15 @@ const MAX_ATTEMPTS = 5;
 /**
  * Soft ceiling for outbound BC Parks calls from this process.
  * Undocumented edge limits + WAF mean bursts get 403/429; stay polite.
+ * Fast values are used until a block is seen, then pacing degrades to the
+ * safe values until enough clean responses accumulate (see noteBlock).
  */
-const MAX_IN_FLIGHT = 4;
-const MIN_START_GAP_MS = 225;
+const MAX_IN_FLIGHT_FAST = 6;
+const MAX_IN_FLIGHT_SAFE = 4;
+const MIN_START_GAP_FAST_MS = 150;
+const MIN_START_GAP_SAFE_MS = 225;
+/** Clean responses required before returning to fast pacing. */
+const RECOVERY_SUCCESSES = 40;
 /** After repeated blocks, pause the whole process briefly. */
 const CIRCUIT_BLOCKS = 3;
 const CIRCUIT_COOLDOWN_MS = 60_000;
@@ -45,7 +51,17 @@ const paceState = {
   timer: null as ReturnType<typeof setTimeout> | null,
   blockHits: 0,
   cooldownUntil: 0,
+  degraded: false,
+  cleanSuccesses: 0,
 };
+
+function maxInFlight(): number {
+  return paceState.degraded ? MAX_IN_FLIGHT_SAFE : MAX_IN_FLIGHT_FAST;
+}
+
+function minStartGapMs(): number {
+  return paceState.degraded ? MIN_START_GAP_SAFE_MS : MIN_START_GAP_FAST_MS;
+}
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -60,12 +76,9 @@ function schedulePacePump(delayMs: number): void {
 }
 
 function pumpPaceGate(): void {
-  while (
-    paceState.queue.length > 0 &&
-    paceState.inFlight < MAX_IN_FLIGHT
-  ) {
+  while (paceState.queue.length > 0 && paceState.inFlight < maxInFlight()) {
     const now = Date.now();
-    const gapWait = paceState.lastStartAt + MIN_START_GAP_MS - now;
+    const gapWait = paceState.lastStartAt + minStartGapMs() - now;
     if (gapWait > 0) {
       schedulePacePump(gapWait);
       return;
@@ -98,6 +111,8 @@ function releasePaceSlot(): void {
 
 function noteBlock(): void {
   paceState.blockHits += 1;
+  paceState.degraded = true;
+  paceState.cleanSuccesses = 0;
   if (paceState.blockHits >= CIRCUIT_BLOCKS) {
     paceState.cooldownUntil = Date.now() + CIRCUIT_COOLDOWN_MS;
     paceState.blockHits = 0;
@@ -106,6 +121,13 @@ function noteBlock(): void {
 
 function noteSuccess(): void {
   paceState.blockHits = 0;
+  if (!paceState.degraded) return;
+
+  paceState.cleanSuccesses += 1;
+  if (paceState.cleanSuccesses >= RECOVERY_SUCCESSES) {
+    paceState.degraded = false;
+    paceState.cleanSuccesses = 0;
+  }
 }
 
 function retryDelayMs(
@@ -451,48 +473,66 @@ export async function isOnlineReservableStay(options: {
     .every((day) => day.processedAvailability === AVAILABILITY_OPEN);
 }
 
-type ResourceNamePayload = Record<
+type ResourcePayload = Record<
   string,
   {
     resourceId?: number;
     localizedValues?: Array<{
       cultureName?: string;
       name?: string;
+      description?: string;
+    }>;
+    linkedResources?: Array<{
+      linkedResourceId?: number;
+      linkedResourceType?: number;
     }>;
   }
 >;
 
-const resourceNameCache = new Map<
+export type ResourceMeta = {
+  /** Campsite label from BC Parks (e.g. "B59", "D7") */
+  name?: string;
+  /** Half of a double site — both halves must be booked together */
+  isDouble: boolean;
+};
+
+const resourceMetaCache = new Map<
   number,
-  { expires: number; value: Record<string, string> }
+  { expires: number; value: Record<string, ResourceMeta> }
 >();
-const RESOURCE_NAME_TTL_MS = 6 * 60 * 60 * 1000;
+const RESOURCE_META_TTL_MS = 6 * 60 * 60 * 1000;
 
 /**
- * Campsite labels (B59, D7, …) keyed by resourceId for a park.
- * Cached longer than availability — names rarely change.
+ * Site labels and double-site flags keyed by resourceId for a park.
+ * Cached longer than availability — neither changes when sites book.
+ *
+ * `linkedResources` is how GoingToCamp models a double site: each half links
+ * to the other. It is the structured signal, and catches pairs whose English
+ * description does not spell out "half of a double site".
  */
-export async function fetchResourceNames(
+export async function fetchResourceMeta(
   resourceLocationId: number,
-): Promise<Record<string, string>> {
-  const hit = resourceNameCache.get(resourceLocationId);
+): Promise<Record<string, ResourceMeta>> {
+  const hit = resourceMetaCache.get(resourceLocationId);
   if (hit && hit.expires > Date.now()) {
     return hit.value;
   }
 
   const url = `${BCPARKS_BASE}/api/resourceLocation/resources?resourceLocationId=${resourceLocationId}`;
-  const payload = await getJson<ResourceNamePayload>(url);
+  const payload = await getJson<ResourcePayload>(url);
 
-  const names: Record<string, string> = {};
+  const meta: Record<string, ResourceMeta> = {};
   for (const [id, resource] of Object.entries(payload)) {
-    const name = resource.localizedValues?.[0]?.name?.trim();
-    if (name) names[id] = name;
+    meta[id] = {
+      name: resource.localizedValues?.[0]?.name?.trim() || undefined,
+      isDouble: (resource.linkedResources ?? []).length > 0,
+    };
   }
 
-  resourceNameCache.set(resourceLocationId, {
-    expires: Date.now() + RESOURCE_NAME_TTL_MS,
-    value: names,
+  resourceMetaCache.set(resourceLocationId, {
+    expires: Date.now() + RESOURCE_META_TTL_MS,
+    value: meta,
   });
 
-  return names;
+  return meta;
 }

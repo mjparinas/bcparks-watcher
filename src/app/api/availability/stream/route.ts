@@ -54,6 +54,11 @@ function parseDateOverrides(
   return { startDate, endDate };
 }
 
+function parseBoolParam(value: string | null): boolean | undefined {
+  if (value == null || value === "") return undefined;
+  return value === "1" || value.toLowerCase() === "true";
+}
+
 function parseNights(searchParams: URLSearchParams): DayOfWeek[] | undefined {
   const raw = searchParams.get("nights");
   if (!raw) return undefined;
@@ -78,6 +83,9 @@ export async function GET(request: NextRequest) {
   const partyOverrides = parsePartyOverrides(request.nextUrl.searchParams);
   const dateOverrides = parseDateOverrides(request.nextUrl.searchParams);
   const nights = parseNights(request.nextUrl.searchParams);
+  const excludeDoubleSites = parseBoolParam(
+    request.nextUrl.searchParams.get("excludeDoubles"),
+  );
   const encoder = new TextEncoder();
 
   const stream = new ReadableStream<Uint8Array>({
@@ -90,6 +98,7 @@ export async function GET(request: NextRequest) {
             ...(partyOverrides ? { partyOverrides } : {}),
             dateOverrides: dateOverrides ?? {},
             ...(nights ? { nights } : {}),
+            ...(excludeDoubleSites != null ? { excludeDoubleSites } : {}),
           },
           { shortNames },
         )) {

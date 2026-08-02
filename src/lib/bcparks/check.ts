@@ -20,8 +20,9 @@ import {
 import {
   buildBookingUrl,
   fetchParkAvailability,
-  fetchResourceNames,
+  fetchResourceMeta,
   isOnlineReservableStay,
+  type ResourceMeta,
   type SiteDailyAvailability,
 } from "./client";
 import {
@@ -40,9 +41,9 @@ export type CheckOverrides = Partial<WatcherConfig> & {
 };
 
 /** How many parks to process at once (outbound calls are also paced). */
-const PARK_CONCURRENCY = 4;
+const PARK_CONCURRENCY = 6;
 /** Max sites to confirm via processedAvailability per park/weekend */
-const MAX_VERIFY_SITES = 5;
+const MAX_VERIFY_SITES = 4;
 
 function resolveConfig(overrides?: CheckOverrides): WatcherConfig {
   const { partyOverrides, dateOverrides, ...rest } = overrides ?? {};
@@ -196,20 +197,35 @@ async function verifyOnlineReservableSites(options: {
   return verified;
 }
 
-async function attachSiteNames(
-  park: ParkConfig,
-  sites: OpenSite[],
-): Promise<OpenSite[]> {
-  if (sites.length === 0) return sites;
+type SiteMeta = Record<string, ResourceMeta>;
+
+/** Site labels + double-site flags for a park; empty map if the lookup fails. */
+async function loadSiteMeta(park: ParkConfig): Promise<SiteMeta> {
   try {
-    const names = await fetchResourceNames(park.resourceLocationId);
-    return sites.map((site) => ({
-      ...site,
-      name: names[site.resourceId] ?? site.name,
-    }));
+    return await fetchResourceMeta(park.resourceLocationId);
   } catch {
-    return sites;
+    return {};
   }
+}
+
+function attachSiteMeta(meta: SiteMeta, sites: OpenSite[]): OpenSite[] {
+  return sites.map((site) => {
+    const entry = meta[site.resourceId];
+    if (!entry) return site;
+    return {
+      ...site,
+      name: entry.name ?? site.name,
+      ...(entry.isDouble ? { isDouble: true } : {}),
+    };
+  });
+}
+
+/**
+ * Drop half-of-a-double sites before verifying, so the verify cap is spent on
+ * sites that can actually be booked on their own.
+ */
+function dropDoubleSites(meta: SiteMeta, sites: OpenSite[]): OpenSite[] {
+  return sites.filter((site) => !meta[site.resourceId]?.isDouble);
 }
 
 async function buildWeekendResult(options: {
@@ -218,14 +234,18 @@ async function buildWeekendResult(options: {
   window: WeekendWindow;
   daily: Record<string, SiteDailyAvailability>;
   dateIndex: Map<string, number>;
+  siteMeta: SiteMeta;
 }): Promise<WeekendResult> {
-  const { config, park, window, daily, dateIndex } = options;
+  const { config, park, window, daily, dateIndex, siteMeta } = options;
   const startDate = formatDate(window.arrival);
   const endDateApi = formatDate(window.nights[window.nights.length - 1]);
   const departureDate = formatDate(window.departure);
   const nightCount = window.nights.length;
 
-  const candidates = candidatesForWindow(daily, window, dateIndex);
+  const allCandidates = candidatesForWindow(daily, window, dateIndex);
+  const candidates = config.excludeDoubleSites
+    ? dropDoubleSites(siteMeta, allCandidates)
+    : allCandidates;
   const toVerify = candidates.slice(0, MAX_VERIFY_SITES);
   const sitesCapped = candidates.length > MAX_VERIFY_SITES;
 
@@ -235,7 +255,7 @@ async function buildWeekendResult(options: {
     endDateApi,
     nightCount,
   });
-  const named = await attachSiteNames(park, verified);
+  const named = attachSiteMeta(siteMeta, verified);
 
   const fullWeekendSites = named.length;
   const first = named[0];
@@ -289,26 +309,29 @@ async function checkParkWindows(
 
   const endDateApi = rangeNights[rangeNights.length - 1];
   const dateIndex = buildDateIndex(rangeNights);
-  const daily = await fetchParkDailyRange({
-    park,
-    config,
-    startDate: config.startDate,
-    endDateApi,
-  });
+  const [daily, siteMeta] = await Promise.all([
+    fetchParkDailyRange({
+      park,
+      config,
+      startDate: config.startDate,
+      endDateApi,
+    }),
+    loadSiteMeta(park),
+  ]);
 
-  const results: WeekendResult[] = [];
-  for (const window of windows) {
-    results.push(
-      await buildWeekendResult({
+  // Windows share the one map walk above, so only the verify calls overlap.
+  return Promise.all(
+    windows.map((window) =>
+      buildWeekendResult({
         config,
         park,
         window,
         daily,
         dateIndex,
+        siteMeta,
       }),
-    );
-  }
-  return results;
+    ),
+  );
 }
 
 export type MoreOpenSitesResult = {
@@ -328,8 +351,14 @@ export async function findRemainingOpenSites(options: {
   nightCount: number;
   excludeResourceIds?: string[];
   partyOverrides?: PartyOverrides;
+  excludeDoubleSites?: boolean;
 }): Promise<MoreOpenSitesResult> {
-  const config = resolveConfig({ partyOverrides: options.partyOverrides });
+  const config = resolveConfig({
+    partyOverrides: options.partyOverrides,
+    ...(options.excludeDoubleSites != null
+      ? { excludeDoubleSites: options.excludeDoubleSites }
+      : {}),
+  });
   const park = getActiveParks(config, {
     shortNames: [options.shortName],
   })[0];
@@ -343,12 +372,15 @@ export async function findRemainingOpenSites(options: {
   }
 
   const exclude = new Set(options.excludeResourceIds ?? []);
-  const daily = await fetchParkDailyRange({
-    park,
-    config,
-    startDate: options.arrivalDate,
-    endDateApi: options.lastNightDate,
-  });
+  const [daily, siteMeta] = await Promise.all([
+    fetchParkDailyRange({
+      park,
+      config,
+      startDate: options.arrivalDate,
+      endDateApi: options.lastNightDate,
+    }),
+    loadSiteMeta(park),
+  ]);
 
   const nightDates = nightsInExclusiveRange(
     options.arrivalDate,
@@ -361,9 +393,12 @@ export async function findRemainingOpenSites(options: {
     departure: addDays(parseIsoDate(options.lastNightDate), 1),
   };
 
-  const candidates = candidatesForWindow(daily, fakeWindow, dateIndex).filter(
+  const found = candidatesForWindow(daily, fakeWindow, dateIndex).filter(
     (site) => !exclude.has(site.resourceId),
   );
+  const candidates = config.excludeDoubleSites
+    ? dropDoubleSites(siteMeta, found)
+    : found;
 
   const verified = await verifyOnlineReservableSites({
     candidates,
@@ -371,7 +406,7 @@ export async function findRemainingOpenSites(options: {
     endDateApi: options.lastNightDate,
     nightCount: options.nightCount,
   });
-  const named = await attachSiteNames(park, verified);
+  const named = attachSiteMeta(siteMeta, verified);
 
   return {
     parkShortName: park.shortName,

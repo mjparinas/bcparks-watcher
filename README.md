@@ -80,8 +80,8 @@ Some campsites are half of a **double** — BC Parks only rents the pair togethe
 
 ## Periodic checks
 
-1. **Dashboard auto-refresh** — `pollIntervalMinutes` (default 5)
-2. **Vercel Cron** — [`vercel.json`](vercel.json) hits `/api/cron` every 5 minutes
+1. **Dashboard auto-refresh** — `pollIntervalMinutes` (default 5); use locally (see Vercel note below)
+2. **`/api/cron`** — optional scheduler endpoint (Hobby cron intervals are limited)
 3. **Webhook alerts** — set `NOTIFY_WEBHOOK_URL` in `.env.local`
 4. **Browser notifications** — enable alerts on the dashboard
 
@@ -93,3 +93,4 @@ Optional env (see `.env.example`): `NOTIFY_WEBHOOK_URL`, `CRON_SECRET`.
 - Be polite with polling; 5 minutes is the current default.
 - “Full” means at least one site is open on **every** selected night.
 - Book links open the official BC Parks reservation flow.
+- **Vercel hosting:** the dashboard can deploy, but BC Parks’ Azure Front Door often **403s Vercel IPs**. Run `npm run dev` locally for real searches / Auto polling.

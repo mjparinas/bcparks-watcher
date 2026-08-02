@@ -72,6 +72,7 @@ Browser Dashboard
 ## BC Parks / GoingToCamp
 
 - **No published rate limits.** Azure Front Door / WAF. Custom bot UAs → **403**. Bursts → **429** or HTML blocks.
+- **Vercel / cloud egress:** Azure Front Door often **403s datacenter IPs** even with a Chrome-like UA. Local/residential Next.js works; production on Vercel typically cannot reach camping.bcparks.ca. Fail fast on 403 (don’t retry into the 120s `maxDuration`). Dashboard shows `bcParksEgressBlocked` when `VERCEL` is set.
 - Use **Chrome-like UA** + `Origin` / `Referer` to camping.bcparks.ca (`client.ts`).
 - Codes: `0` open, `1` booked, `3` not online-reservable (FCFS), `5` closed/out of season.
 - Site **labels** from `GET /api/resourceLocation/resources?resourceLocationId=…` → `localizedValues[0].name`. Map availability only has numeric `resourceId`s.

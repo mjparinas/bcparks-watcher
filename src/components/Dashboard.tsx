@@ -27,6 +27,7 @@ type PublicConfig = {
   pollIntervalMinutes: number;
   partySize: number;
   tents: number;
+  excludeDoubleSites?: boolean;
   parks: Array<{
     name: string;
     shortName: string;
@@ -41,6 +42,15 @@ function formatCheckedAt(iso: string): string {
     dateStyle: "medium",
     timeStyle: "short",
   });
+}
+
+function formatDuration(totalMinutes: number): string {
+  const mins = Math.max(0, Math.round(totalMinutes));
+  const h = Math.floor(mins / 60);
+  const m = mins % 60;
+  if (h > 0 && m > 0) return `${h}h ${m}m`;
+  if (h > 0) return `${h}h`;
+  return `${m}m`;
 }
 
 function formatStay(weekend: WeekendResult): string {
@@ -211,6 +221,34 @@ function nightsKey(nights: DayOfWeek[]): string {
   return nights.join(",");
 }
 
+/**
+ * Settings that change which sites qualify, so sticky results from a previous
+ * value can never be reused.
+ */
+function resultsSignature(party: PartySettings, excludeDoubles: boolean): string {
+  return `${party.partySize}:${party.tents}:${excludeDoubles ? "nodbl" : "all"}`;
+}
+
+/**
+ * Everything that decides which openings a scan can return. The first completed
+ * scan for a signature is a silent baseline, so only openings that appear while
+ * watching raise an alert.
+ */
+function filterSignature(
+  parks: Set<string>,
+  party: PartySettings,
+  dates: DateSettings,
+  nights: DayOfWeek[],
+  excludeDoubles: boolean,
+): string {
+  return [
+    [...parks].sort().join("|"),
+    resultsSignature(party, excludeDoubles),
+    `${dates.startDate}..${dates.endDate}`,
+    nightsKey(nights),
+  ].join(";");
+}
+
 function resultMatchesFilters(
   weekend: WeekendResult,
   parks: Set<string>,
@@ -255,6 +293,7 @@ type SavedFilters = {
   nights?: string[];
   autoRefresh?: boolean;
   sortBy?: SortBy;
+  excludeDoubles?: boolean;
 };
 
 function readSavedFilters(): SavedFilters | null {
@@ -286,38 +325,75 @@ function todayIsoLocal(): string {
   }).format(new Date());
 }
 
-function playAlertTone(): void {
+const ALERT_PEAK_GAIN = 0.6;
+
+let audioCtx: AudioContext | null = null;
+
+/** One shared context — per-alert contexts hit browser limits and start suspended. */
+function getAudioContext(): AudioContext | null {
+  if (audioCtx) return audioCtx;
   try {
     const Ctx =
       window.AudioContext ||
       (window as unknown as { webkitAudioContext?: typeof AudioContext })
         .webkitAudioContext;
-    if (!Ctx) return;
-    const ctx = new Ctx();
+    if (!Ctx) return null;
+    audioCtx = new Ctx();
+    return audioCtx;
+  } catch {
+    return null;
+  }
+}
+
+/** Autoplay policy only lifts inside a user gesture; call from a real event. */
+function unlockAudio(): void {
+  const ctx = getAudioContext();
+  if (ctx && ctx.state === "suspended") void ctx.resume();
+}
+
+async function playAlertTone(): Promise<void> {
+  try {
+    const ctx = getAudioContext();
+    if (!ctx) return;
+
+    // Resume before reading currentTime — a suspended clock does not advance.
+    if (ctx.state === "suspended") await ctx.resume();
+
+    const compressor = ctx.createDynamicsCompressor();
+    compressor.threshold.setValueAtTime(-12, ctx.currentTime);
+    compressor.ratio.setValueAtTime(12, ctx.currentTime);
+    compressor.connect(ctx.destination);
+
     const beep = (freq: number, start: number, duration: number) => {
-      const osc = ctx.createOscillator();
       const gain = ctx.createGain();
-      osc.type = "sine";
-      osc.frequency.value = freq;
       gain.gain.setValueAtTime(0.0001, start);
-      gain.gain.exponentialRampToValueAtTime(0.1, start + 0.02);
+      gain.gain.exponentialRampToValueAtTime(ALERT_PEAK_GAIN, start + 0.015);
       gain.gain.exponentialRampToValueAtTime(0.0001, start + duration);
-      osc.connect(gain);
-      gain.connect(ctx.destination);
-      osc.start(start);
-      osc.stop(start + duration + 0.03);
+      gain.connect(compressor);
+
+      // Detuned pair: carries further than a bare sine at the same amplitude.
+      for (const detune of [0, 7]) {
+        const osc = ctx.createOscillator();
+        osc.type = "triangle";
+        osc.frequency.value = freq;
+        osc.detune.value = detune;
+        osc.connect(gain);
+        osc.start(start);
+        osc.stop(start + duration + 0.03);
+      }
     };
+
     const t = ctx.currentTime;
     beep(880, t, 0.16);
-    beep(1245, t + 0.18, 0.22);
-    void ctx.resume();
+    beep(1245, t + 0.18, 0.16);
+    beep(1245, t + 0.38, 0.28);
   } catch {
     // autoplay / unsupported — ignore
   }
 }
 
 function announceOpening(weekend: WeekendResult): void {
-  playAlertTone();
+  void playAlertTone();
   if (!("Notification" in window) || Notification.permission !== "granted") {
     return;
   }
@@ -348,6 +424,7 @@ export function Dashboard() {
   const [party, setParty] = useState<PartySettings>(DEFAULT_PARTY);
   const [dates, setDates] = useState<DateSettings>(DEFAULT_DATES);
   const [nights, setNights] = useState<DayOfWeek[]>(DEFAULT_NIGHTS);
+  const [excludeDoubles, setExcludeDoubles] = useState(false);
   const [sortBy, setSortBy] = useState<SortBy>("date");
   const [recentlyGone, setRecentlyGone] = useState<GoneOpening[]>([]);
   const [settingsReady, setSettingsReady] = useState(false);
@@ -359,6 +436,7 @@ export function Dashboard() {
   const partyRef = useRef(party);
   const datesRef = useRef(dates);
   const nightsRef = useRef(nights);
+  const excludeDoublesRef = useRef(excludeDoubles);
   const sortByRef = useRef(sortBy);
   const autoRefreshRef = useRef(autoRefresh);
   const configRef = useRef(config);
@@ -369,8 +447,10 @@ export function Dashboard() {
     ((parksOverride?: Set<string>) => Promise<void>) | null
   >(null);
   const skipSettingsReload = useRef(true);
-  /** Party signature used for the results currently on screen */
-  const resultsPartyKey = useRef(`${party.partySize}:${party.tents}`);
+  /** Signature of the settings that produced the results currently on screen */
+  const resultsPartyKey = useRef(resultsSignature(party, excludeDoubles));
+  /** Filter signature whose openings have already been seen at least once */
+  const baselineSignature = useRef<string | null>(null);
 
   const nightsContiguous = useMemo(
     () => areNightsContiguous(nights),
@@ -408,6 +488,10 @@ export function Dashboard() {
   useEffect(() => {
     nightsRef.current = nights;
   }, [nights]);
+
+  useEffect(() => {
+    excludeDoublesRef.current = excludeDoubles;
+  }, [excludeDoubles]);
 
   useEffect(() => {
     sortByRef.current = sortBy;
@@ -458,6 +542,16 @@ export function Dashboard() {
     const partyToUse = partyRef.current;
     const datesToUse = datesRef.current;
     const nightsToUse = nightsRef.current;
+    const excludeDoublesToUse = excludeDoublesRef.current;
+    const runSignature = filterSignature(
+      parksToCheck,
+      partyToUse,
+      datesToUse,
+      nightsToUse,
+      excludeDoublesToUse,
+    );
+    // Openings already on screen when a scan starts are not new.
+    const announceNewHits = baselineSignature.current === runSignature;
 
     abortRef.current?.abort();
     const controller = new AbortController();
@@ -467,9 +561,10 @@ export function Dashboard() {
     setErrors([]);
     setProgress({ index: 0, total: 0 });
 
-    const partyKey = `${partyToUse.partySize}:${partyToUse.tents}`;
+    const partyKey = resultsSignature(partyToUse, excludeDoublesToUse);
     if (resultsPartyKey.current !== partyKey) {
-      // Party/tents change availability — drop all sticky results.
+      // Party/tents/double-site changes alter which sites qualify — drop all
+      // sticky results.
       setWeekends([]);
       setRecentlyGone([]);
       previousHits.current = new Set();
@@ -522,6 +617,7 @@ export function Dashboard() {
       startDate: datesToUse.startDate,
       endDate: datesToUse.endDate,
       nights: ordered.join(","),
+      excludeDoubles: excludeDoublesToUse ? "1" : "0",
       // Ensure each Search/auto-refresh is a distinct request
       _: String(Date.now()),
     });
@@ -596,7 +692,9 @@ export function Dashboard() {
               );
               if (!previousHits.current.has(key)) {
                 previousHits.current.add(key);
-                announceOpening(event.result);
+                if (announceNewHits) {
+                  announceOpening(event.result);
+                }
               }
             } else {
               const prior = hitsBeforeSearch.current.get(key);
@@ -634,7 +732,10 @@ export function Dashboard() {
                 event.report.weekends.length + event.report.errors.length,
             });
             setWeekends(sortWeekends(event.report.weekends, sortByRef.current));
-            resultsPartyKey.current = `${partyRef.current.partySize}:${partyRef.current.tents}`;
+            resultsPartyKey.current = resultsSignature(
+              partyRef.current,
+              excludeDoublesRef.current,
+            );
             setErrors(event.report.errors);
             setProgress({
               index: event.report.weekends.length + event.report.errors.length,
@@ -653,6 +754,7 @@ export function Dashboard() {
             }
             hitsBeforeSearch.current = new Map();
             previousHits.current = hitKeys;
+            baselineSignature.current = runSignature;
           }
         }
       }
@@ -746,14 +848,25 @@ export function Dashboard() {
           sortByRef.current = saved.sortBy;
         }
 
+        const nextExcludeDoubles =
+          typeof saved?.excludeDoubles === "boolean"
+            ? saved.excludeDoubles
+            : Boolean(data.excludeDoubleSites);
+
         setConfig(data);
         setSelectedParks(parks);
         setParty(nextParty);
         setDates(nextDates);
         setNights(nextNights);
+        setExcludeDoubles(nextExcludeDoubles);
         partyRef.current = nextParty;
         datesRef.current = nextDates;
         nightsRef.current = nextNights;
+        excludeDoublesRef.current = nextExcludeDoubles;
+        resultsPartyKey.current = resultsSignature(
+          nextParty,
+          nextExcludeDoubles,
+        );
         setSettingsReady(true);
         void load(parks);
       })
@@ -791,8 +904,18 @@ export function Dashboard() {
       nights,
       autoRefresh,
       sortBy,
+      excludeDoubles,
     });
-  }, [settingsReady, selectedParks, party, dates, nights, autoRefresh, sortBy]);
+  }, [
+    settingsReady,
+    selectedParks,
+    party,
+    dates,
+    nights,
+    autoRefresh,
+    sortBy,
+    excludeDoubles,
+  ]);
 
   useEffect(() => {
     if (!autoRefresh || !config) return;
@@ -803,6 +926,19 @@ export function Dashboard() {
     }, ms);
     return () => window.clearInterval(id);
   }, [autoRefresh, config, load]);
+
+  // Alerts fire on a timer, not a click — unlock audio on the first gesture
+  // so the tone is not silenced by autoplay policy later.
+  useEffect(() => {
+    const onGesture = () => unlockAudio();
+    const options = { once: true, passive: true } as const;
+    window.addEventListener("pointerdown", onGesture, options);
+    window.addEventListener("keydown", onGesture, options);
+    return () => {
+      window.removeEventListener("pointerdown", onGesture);
+      window.removeEventListener("keydown", onGesture);
+    };
+  }, []);
 
   // Survive laptop sleep / network blips: abort hung searches and catch up.
   // Keep polling while the tab is hidden; only gate on connectivity.
@@ -856,7 +992,7 @@ export function Dashboard() {
   useEffect(() => {
     if (!settingsReady) return;
     const parks = selectedParks;
-    const partyKey = `${party.partySize}:${party.tents}`;
+    const partyKey = resultsSignature(party, excludeDoubles);
     if (resultsPartyKey.current !== partyKey) {
       setWeekends([]);
       setRecentlyGone([]);
@@ -888,6 +1024,7 @@ export function Dashboard() {
     nightsKey(nights),
     party.partySize,
     party.tents,
+    excludeDoubles,
   ]);
   useEffect(() => {
     if (!settingsReady || !config) return;
@@ -912,6 +1049,7 @@ export function Dashboard() {
     dates.startDate,
     dates.endDate,
     nightsKey(nights),
+    excludeDoubles,
     settingsReady,
   ]);
 
@@ -1052,7 +1190,7 @@ export function Dashboard() {
           >
             Auto{" "}
             {autoRefresh
-              ? `${config?.pollIntervalMinutes ?? 10} mins`
+              ? formatDuration(config?.pollIntervalMinutes ?? 10)
               : "off"}
           </button>
           {notifyPermission !== "granted" &&
@@ -1074,27 +1212,48 @@ export function Dashboard() {
         </p>
 
         <div className="filters">
-          <div className="filter-block">
-            <span className="filter-label">Nights</span>
-            <div className="day-chips" role="group" aria-label="Nights to stay">
-              {DAYS_OF_WEEK.map((day) => {
-                const selected = nights.includes(day);
-                return (
-                  <button
-                    key={day}
-                    type="button"
-                    className={`day-chip ${selected ? "selected" : ""}`}
-                    aria-pressed={selected}
-                    onClick={() => toggleNight(day)}
-                  >
-                    {shortDayLabel(day)}
-                  </button>
-                );
-              })}
+          <div className="filter-row">
+            <div className="filter-block">
+              <span className="filter-label">Nights</span>
+              <div
+                className="day-chips"
+                role="group"
+                aria-label="Nights to stay"
+              >
+                {DAYS_OF_WEEK.map((day) => {
+                  const selected = nights.includes(day);
+                  return (
+                    <button
+                      key={day}
+                      type="button"
+                      className={`day-chip ${selected ? "selected" : ""}`}
+                      aria-pressed={selected}
+                      onClick={() => toggleNight(day)}
+                    >
+                      {shortDayLabel(day)}
+                    </button>
+                  );
+                })}
+              </div>
+              {!nightsContiguous ? (
+                <p className="day-hint">Nights must be consecutive.</p>
+              ) : null}
             </div>
-            {!nightsContiguous ? (
-              <p className="day-hint">Nights must be consecutive.</p>
-            ) : null}
+
+            <div className="filter-block">
+              <span className="filter-label">Sites</span>
+              <div className="day-chips" role="group" aria-label="Site types">
+                <button
+                  type="button"
+                  className={`day-chip ${excludeDoubles ? "selected" : ""}`}
+                  aria-pressed={excludeDoubles}
+                  title="Double sites must be booked together with their other half"
+                  onClick={() => setExcludeDoubles((value) => !value)}
+                >
+                  Hide doubles
+                </button>
+              </div>
+            </div>
           </div>
 
           <div className="filter-block">
@@ -1155,7 +1314,7 @@ export function Dashboard() {
                       <span className="park-chip-name">{park.shortName}</span>
                       {park.driveMinutesFromHome != null ? (
                         <span className="park-drive">
-                          {park.driveMinutesFromHome} min
+                          {formatDuration(park.driveMinutesFromHome)}
                         </span>
                       ) : null}
                     </button>
@@ -1235,6 +1394,7 @@ export function Dashboard() {
                 key={resultKey(weekend)}
                 weekend={weekend}
                 party={party}
+                excludeDoubles={excludeDoubles}
                 onExpandSites={(key, expansion) => {
                   setWeekends((current) =>
                     sortWeekends(
@@ -1386,7 +1546,9 @@ function GoneRow({ weekend }: { weekend: WeekendResult }) {
           <span className="park">{weekend.parkShortName}</span>
           <span className="stay">{formatStay(weekend)}</span>
           {weekend.driveMinutesFromHome != null ? (
-            <span className="drive">{weekend.driveMinutesFromHome} min</span>
+            <span className="drive">
+              {formatDuration(weekend.driveMinutesFromHome)}
+            </span>
           ) : null}
         </div>
       </div>
@@ -1398,10 +1560,12 @@ function GoneRow({ weekend }: { weekend: WeekendResult }) {
 function WeekendRow({
   weekend,
   party,
+  excludeDoubles,
   onExpandSites,
 }: {
   weekend: WeekendResult;
   party: PartySettings;
+  excludeDoubles: boolean;
   onExpandSites: (
     key: string,
     expansion: { openSites: OpenSite[]; sitesCapped: boolean },
@@ -1429,6 +1593,7 @@ function WeekendRow({
       nightCount: String(weekend.nights.length),
       partySize: String(party.partySize),
       tents: String(party.tents),
+      excludeDoubles: excludeDoubles ? "1" : "0",
       exclude: sites.map((site) => site.resourceId).join(","),
     });
 
@@ -1462,7 +1627,9 @@ function WeekendRow({
           <span className="park">{weekend.parkShortName}</span>
           <span className="stay">{formatStay(weekend)}</span>
           {weekend.driveMinutesFromHome != null ? (
-            <span className="drive">{weekend.driveMinutesFromHome} min</span>
+            <span className="drive">
+              {formatDuration(weekend.driveMinutesFromHome)}
+            </span>
           ) : null}
           <span className="site-count">
             {weekend.fullWeekendSites}
@@ -1475,17 +1642,24 @@ function WeekendRow({
             {sites.map((site) => (
               <a
                 key={site.resourceId}
-                className="site-id"
+                className={`site-id ${site.isDouble ? "double" : ""}`}
                 href={bookingUrlForSite(weekend.bookingUrl, site.resourceId)}
                 target="_blank"
                 rel="noreferrer"
                 title={
-                  site.name
-                    ? `${site.name}`
-                    : `Site ${formatSiteId(site.resourceId)}`
+                  site.isDouble
+                    ? `${siteLabel(site)} — half of a double site, must be booked with its other half`
+                    : site.name
+                      ? `${site.name}`
+                      : `Site ${formatSiteId(site.resourceId)}`
                 }
               >
                 {siteLabel(site)}
+                {site.isDouble ? (
+                  <span className="site-double" aria-label="double site">
+                    ×2
+                  </span>
+                ) : null}
               </a>
             ))}
             {weekend.sitesCapped ? (
@@ -1497,7 +1671,10 @@ function WeekendRow({
                 aria-busy={loadingMore}
                 title="Find remaining open campsites"
               >
-                {loadingMore ? "…" : "more"}
+                {loadingMore ? (
+                  <span className="chip-spinner" aria-hidden="true" />
+                ) : null}
+                {loadingMore ? "finding…" : "more"}
               </button>
             ) : null}
           </div>

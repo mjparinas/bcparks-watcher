@@ -39,14 +39,14 @@ Browser Dashboard
 
 - **BC Parks HTTP runs on the Next.js server only.** The browser never calls camping.bcparks.ca.
 - SSE: `meta` → many `result` / `error` → `done`.
-- Search and Auto both use the stream. Auto = `pollIntervalMinutes` (default **10**).
+- Search and Auto both use the stream. Auto = `pollIntervalMinutes` (default **5**).
 
 ### Key files
 
 | Path | Role |
 | --- | --- |
 | `src/config/watcher.config.ts` | Parks list, defaults, party/date helpers |
-| `src/lib/bcparks/client.ts` | Headers, pacing, short cache, map walk, names, verifies |
+| `src/lib/bcparks/client.ts` | Headers, pacing, short cache, map walk, site meta (names + doubles), verifies |
 | `src/lib/bcparks/check.ts` | One walk/park, weekend slice, SSE events |
 | `src/lib/bcparks/weekends.ts` | Contiguous nights, stay windows |
 | `src/lib/bcparks/types.ts` | API + report types (`OpenSite.name`, etc.) |
@@ -76,21 +76,24 @@ Browser Dashboard
 - Use **Chrome-like UA** + `Origin` / `Referer` to camping.bcparks.ca (`client.ts`).
 - Codes: `0` open, `1` booked, `3` not online-reservable (FCFS), `5` closed/out of season.
 - Site **labels** from `GET /api/resourceLocation/resources?resourceLocationId=…` → `localizedValues[0].name`. Map availability only has numeric `resourceId`s.
+- **Double sites**: same payload, `linkedResources` non-empty (`linkedResourceType: 2`) = half of a double that must be booked with its other half. Use this, **not** the English `description` — the text wording varies ("Half of a double site with X", "Double with 39", or blank for `M24a`/`M24b` pairs) and misses real doubles. Both are surfaced by `fetchResourceMeta` (6h cache, same request that provides names).
 - Holiday / min-stay (e.g. Labour Day 3-night) **not modeled** — 2-night searches can look empty.
 
 ### Politeness / speed knobs
 
 | Knob | Current | Intent |
 | --- | --- | --- |
-| `MAX_IN_FLIGHT` | 4 | Concurrent BC Parks calls |
-| `MIN_START_GAP_MS` | 225 | Gap between request starts |
+| `MAX_IN_FLIGHT_FAST` / `_SAFE` | 6 / 4 | Concurrent BC Parks calls |
+| `MIN_START_GAP_FAST_MS` / `_SAFE_MS` | 150 / 225 | Gap between request starts |
+| Adaptive pacing | Any 403/429 → safe values; back to fast after 40 clean responses | Fast by default, polite under pressure |
 | `RESPONSE_TTL_MS` | 25s | Reuse identical URLs (personal snappy re-search) |
 | Circuit breaker | 3× 403/429 → 60s cooldown | Honors `Retry-After` |
-| Park concurrency | 4 | Parks in parallel |
-| `MAX_VERIFY_SITES` | 5 | Cap; UI **more** loads rest |
+| Park concurrency | 6 | Parks in parallel |
+| Stay windows | All windows for a park verified in parallel | Shares the single map walk |
+| `MAX_VERIFY_SITES` | 4 | Cap; UI **more** loads rest |
 | Map strategy | **One walk per park** for From→Until, slice weekends in memory | Avoids park×weekend map walks |
 | Resource names | 6h cache | Names don’t change when sites book |
-| `pollIntervalMinutes` | 10 | Auto + Vercel cron |
+| `pollIntervalMinutes` | 5 | Auto + Vercel cron |
 
 Do **not** reintroduce a long cross-search availability TTL (e.g. 45s+) without a fresh-search bypass — it made re-Search look like a no-op.
 
@@ -100,14 +103,16 @@ Pacing is tuned for **personal** use. Public multi-user would need a shared shor
 
 ## Dashboard rules
 
-- Filters: `localStorage` key `bcparks-watcher-filters-v1` (parks, party, dates, nights, auto, sort).
-- Sticky openings while refreshing; prune on parks/dates/nights mismatch. Party/tents change clears all.
+- Filters: `localStorage` key `bcparks-watcher-filters-v1` (parks, party, dates, nights, auto, sort, `excludeDoubles`).
+- Sticky openings while refreshing; prune on parks/dates/nights mismatch. Party/tents **or Hide doubles** change clears all (see `resultsSignature`).
+- **Hide doubles** chip → `excludeDoubles=1` on the stream / more routes → server drops doubles *before* verifying, so `MAX_VERIFY_SITES` is spent on bookable singles. When doubles are shown they get an `×2` marker.
 - Site chips prefer **names**; fallback numeric ID.
 - **more** → `/api/availability/more`.
 - Sort: Date vs Distance segmented control.
 - **Gone** rows ~12s when openings disappear; status may show `· N gone`.
 - Sleep / network: interrupted SSE → friendly message, keep sticky; Auto retries on `online` / wake. **Auto keeps polling while the tab is hidden** (only gated on `navigator.onLine`). Browsers may throttle background timers; visibility/pageshow catch up when due.
-- Alerts: Notification + tone on **new** hit keys; optional `NOTIFY_WEBHOOK_URL`.
+- Alerts: Notification + tone on **new** hit keys only; optional `NOTIFY_WEBHOOK_URL`. The first completed scan for a given `filterSignature` (parks + party + doubles + dates + nights) is a **silent baseline**, so page loads and filter changes never re-announce openings that were already there. Openings that disappear are dropped from `previousHits`, so they alert again if they come back.
+- Keep `resultsPartyKey` writes going through `resultsSignature` — writing a hand-built string there desynced the signature and made every poll wipe sticky results and re-alert.
 
 ### Design
 
@@ -122,6 +127,7 @@ Pacing is tuned for **personal** use. Public multi-user would need a shared shor
 - Defaults / parks: `src/config/watcher.config.ts`
 - Lookup: `npm run lookup -- "garibaldi"` or `GET /api/parks?q=`
 - `nights` must be contiguous (wrap OK). Arrive ≥ `startDate`, depart before exclusive `endDate`.
+- `excludeDoubleSites` is the server default for the **Hide doubles** chip; the UI's saved value wins once set.
 - Env: `NOTIFY_WEBHOOK_URL`, `CRON_SECRET` (see `.env.example`)
 
 ---
